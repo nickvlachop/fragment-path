@@ -53,14 +53,10 @@ struct leaf_cell {
 
 static inline instr* checkWhole(void* restrict cell, void* restrict data, const void* obj, instr* restrict start) {
     uint16_t offset = start->workmode;
-    uint8_t instrcount = cell_instrcount(cell) - 1;
-    start = start->next;
-    while(instrcount) {
+    while((start = start->next) != NULL) {
         compress(data, obj, start->countofjumps, start->jumps);
         if (memcmp(((struct leaf_cell*)cell)->area + offset, data, start->workmode) == 0) {
 			offset += start->workmode;
-			start = start->next;
-			instrcount -= 1;
         }
         else break;
     }
@@ -70,19 +66,16 @@ static inline instr* checkWhole(void* restrict cell, void* restrict data, const 
 static void searchVector(Vector* array, const void* dataOfAddress,instr * restrict element,void ** restrict const place , uint32_t * restrict const flag) {
     uint32_t count = Vector_count(array);
     if (count) {
-        uint8_t offsetVal;
         int result;
         count -= 1;
-        if (*place = Vector_get(array, (*flag = 0)),
-            offsetVal = ((cell_instrcount(*place) == 0) * offsetof(struct inner_cell, area)) + (offsetof(struct leaf_cell, area) * ((cell_instrcount(*place) != 0))),
-            !(result = memcmp((char*)(*place)+offsetVal, dataOfAddress, element->workmode)));
+        if (*place = Vector_get(array, (*flag = 0)) , 
+            !(result = memcmp((char*)(*place)+ (cell_instrcount(*place) ? (offsetof(struct leaf_cell, area)) : offsetof(struct inner_cell, area) ), dataOfAddress, element->workmode)));
         else if (!count || result > 0) {
             *flag = result < 0;
             *place = NULL;
         }
         else if (*place = Vector_get(array, (*flag = count)),
-            offsetVal = ((cell_instrcount(*place) == 0) * offsetof(struct inner_cell, area)) + (offsetof(struct leaf_cell, area) * ((cell_instrcount(*place) != 0))),
-            !(result = memcmp((char*)(*place)+offsetVal, dataOfAddress, element->workmode)));
+            !(result = memcmp((char*)(*place)+ (cell_instrcount(*place) ? (offsetof(struct leaf_cell, area)) : offsetof(struct inner_cell, area)), dataOfAddress, element->workmode)));
         else if (result < 0) {
             *flag = count + 1;
             *place = NULL;
@@ -96,8 +89,7 @@ static void searchVector(Vector* array, const void* dataOfAddress,instr * restri
                     break;
                 }
                 else if (*place = Vector_get(array, (*flag = (count + offset) >> 1)),
-                    offsetVal = ((cell_instrcount(*place) == 0) * offsetof(struct inner_cell, area)) + (offsetof(struct leaf_cell, area) * ((cell_instrcount(*place) != 0))),
-                    !(result = memcmp((char*)(*place)+offsetVal, dataOfAddress, element->workmode)))break;
+                    !(result = memcmp((char*)(*place)+ (cell_instrcount(*place) ? (offsetof(struct leaf_cell, area)) : offsetof(struct inner_cell, area)), dataOfAddress, element->workmode)))break;
                 else if (result > 0) count = *flag;
                 else offset = *flag;
         }
@@ -162,12 +154,9 @@ static instr* restrict Fragpath_iterator_WRITE(struct mthrd_str* path, instr* re
             if (cell_instrcount(place) != 0) {
                 instr* uncommonElement = checkWhole(place, dataOfAddress, address, element);
                 if (uncommonElement != NULL) {
-                    *common_count = 1;
-                    instr* initElement = element->next;
-                    while (initElement != uncommonElement) {
-                        *common_count += 1;
-                        initElement = initElement->next;
-                    }
+                    *common_count = 0;
+                    instr* tempElement = element;
+                    do *common_count += 1; while ((tempElement = tempElement->next) != uncommonElement);
                     *addressOut = path;
                     *arithOut = flag;
                 }
@@ -178,7 +167,7 @@ static instr* restrict Fragpath_iterator_WRITE(struct mthrd_str* path, instr* re
                     cond_broadcast(&element->CNDW);
                     mutex_unlock(&element->Mutex);
 #endif
-                    element = uncommonElement;
+                    element = NULL;
                 }
                 break;
             }
@@ -434,7 +423,7 @@ static void * expandCell(void * cell, void * args ) {
         for (uint8_t i = 1; i < common_count; i++) {
             innerEntry.common = common[i];
             Vector_insert(&((struct inner_cell*)cellBelow)->mthrd.array, 0, makeInner, &innerEntry);
-            cellBelow = Vector_get(&((struct inner_cell*)cell)->mthrd.array, 0);
+            cellBelow = Vector_get(&((struct inner_cell*)cellBelow)->mthrd.array, 0);
             innerEntry.cints = innerEntry.cints->next;
             free(common[i]);
         }
@@ -763,23 +752,40 @@ void Fragpath_create(Fragpath* fragpath,const seginfo* restrict objectStruct,uin
         cpArgs.bytes = sizeof(seginfo);
         uint8_t f = 0;
         {
-            seginfo newseg;
+            seginfo newseg , *currentSeg;
+            currentSeg = NULL;
             cpArgs.obj = &newseg;
-            while ((newseg[1] = objectStruct[f][1]) != 0) {
+            newseg[1] = objectStruct[f][1];
+            do {
                 newseg[0] = objectStruct[f][0];
-                LinkedList_insert(&map, -1, DS_cpy, &cpArgs);
+                if (currentSeg == NULL || newseg[0] != (*currentSeg)[0] + (*currentSeg)[1]) {
+                    LinkedList_insert(&map, -1, DS_cpy, &cpArgs);
+					currentSeg = (seginfo*)LinkedList_get(&map, -1);
+                }
+				else (*currentSeg)[1] += newseg[1];
                 f += 1;
-            }
+            } while ((newseg[1] = objectStruct[f][1]) != 0);
         }
         objBytes = objectStruct[f][0];
+        f = LinkedList_count(&map);
         {
-            seginfo finalseg;
+            seginfo finalseg ,lastitem, *last , *currentTail;
             cpArgs.obj = &finalseg;
-            for (uint8_t i = 1; i < arrayCount; ++i)for (uint8_t k = 0; k < f; ++k) {
-                seginfo* restrict oldseg = (seginfo*)LinkedList_get(&map, k);
-                finalseg[0] = (*oldseg)[0] + (objBytes * i);
-                finalseg[1] = (*oldseg)[1];
-                LinkedList_insert(&map, -1, DS_cpy, &cpArgs);
+            currentTail = (seginfo*)LinkedList_get(&map, f);
+            lastitem[0] = (*currentTail)[0];
+            lastitem[1] = (*currentTail)[1];
+            for (uint8_t i = 1; i < arrayCount; ++i) {
+                for (uint8_t k = 0; k < f; k++) {
+					if (f - k > 1)last = (seginfo*)LinkedList_get(&map, k);
+					else last = &lastitem;
+					finalseg[0] = (*last)[0] + (i * objBytes);
+					finalseg[1] = (*last)[1];
+					if (finalseg[0] == (*currentTail)[0] + (*currentTail)[1])(*currentTail)[1] += finalseg[1];
+                    else {
+                        LinkedList_insert(&map, -1, DS_cpy, &cpArgs);
+						currentTail = (seginfo*)LinkedList_get(&map, -1);
+                    }
+                }
             }
         }
         fragpath->objStructSizes = Fragpath_init(&map, &fragpath->largestByte);
