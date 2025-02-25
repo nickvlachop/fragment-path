@@ -64,59 +64,56 @@ void Vector_insert(Vector* restrict vector, uint32_t loc , createFunc creator , 
     register uint32_t cSize = vector->size;
     register uint32_t count = vector->count;
     if (count == cSize) refactor(vector, (cSize = cSize << 1));
+    if (loc > count)loc = count;
+    register uint32_t cFirst = vector->first;
+    register uint32_t cLast = vector->last;
     register void** bufferHead = vector->head;
-    register uint32_t actualPos;
-    if (loc <= ((count + 1) >> 1)) {
-        bufferHead[(vector->first = actualPos = ((cSize + vector->first) - 1) % cSize)] = creator(obj);
-        loc = (vector->first + loc) % cSize;
-        while (actualPos != loc) {
-            register uint32_t newPos = (actualPos + 1) % cSize;
-            register void* cont = bufferHead[actualPos];
-            bufferHead[actualPos] = bufferHead[newPos];
-            bufferHead[newPos] = cont;
-            actualPos = newPos;
+    if (loc < ((count + 1) >> 1)) {
+        vector->first = cFirst = ((cSize + cFirst) - 1) % cSize;
+        loc = (cFirst + loc) % cSize;
+        while (cFirst != loc) {
+            register uint32_t next;
+            bufferHead[cFirst] = bufferHead[next = (cFirst + 1) % cSize];
+            cFirst = next;
         }
     }
     else {
-        bufferHead[(actualPos = vector->last)] = creator(obj);
-        vector->last = (actualPos + 1) % cSize;
-        loc = (vector->first + loc) % cSize;
-        while (actualPos != loc) {
-            register uint32_t newPos = ((cSize + actualPos) - 1) % cSize;
-            register void* cont = bufferHead[actualPos];
-            bufferHead[actualPos] = bufferHead[newPos];
-            bufferHead[newPos] = cont;
-            actualPos = newPos;
+        loc = (cFirst + loc) % cSize;
+        vector->last = (cLast + 1) % cSize;
+        while (cLast != loc) {
+            register uint32_t next;
+            bufferHead[cLast] = bufferHead[next = ((cSize + cLast) - 1) % cSize];
+            cLast = next;
         }
     }
+    bufferHead[loc] = creator(obj);
     vector->count = count + 1;
     return;
 }
 
-void Vector_executeFunc(Vector* restrict vector, uint32_t loc, void * (*func)(void*, void*), void* args) {
-    if (vector->count == 0);
-    else {
-        if (loc >= vector->count) loc = (vector->size + vector->last - 1) % vector->size;
-        else loc = (vector->first + loc) % vector->size;
+void Vector_executeFunc(Vector* restrict vector, uint32_t loc, void * (*func)(void*, void*), void* args) { 
+    if (vector->count != 0){
+        register uint32_t csize = vector->size;
+        register uint32_t count = vector->count;
+        register uint32_t cFirst = vector->first;
+        register uint32_t cLast = vector->last;
+        if (loc >= count) loc = (csize + cLast - 1) % csize;
+        else loc = (cFirst + loc) % csize;
         void** target = &vector->head[loc];
-        if ((*target = func(*target, args)) == NULL) {
-            register uint32_t actualTarget;
-            register uint32_t csize = vector->size;
+        void* newval = func(*target, args);
+        if (newval == NULL) {
             register void** bufferHead = vector->head;
-            register uint32_t count = vector->count;
-            if (loc <= ((count - 1) >> 1)) {
-                actualTarget = vector->first;
-                vector->first = (actualTarget + 1) % csize;
-                while (loc != actualTarget) {
+            if (((loc > cLast) * (loc - cLast) + (loc <= cLast) * (cLast - loc)) > ((loc > cFirst) * (loc - cFirst) + (loc <= cFirst) * (cFirst - loc))) {
+                vector->first = (cFirst + 1) % csize;
+                while (loc != cFirst) {
                     register uint32_t next;
                     bufferHead[loc] = bufferHead[next = ((csize + loc) - 1) % csize];
                     loc = next;
                 }
             }
             else {
-                actualTarget = (csize + vector->last - 1) % csize;
-                vector->last = actualTarget;
-                while (loc != actualTarget) {
+                vector->last = cLast = (csize + cLast - 1) % csize;
+                while (loc != cLast) {
                     register uint32_t next;
                     bufferHead[loc] = bufferHead[next = (loc + 1) % csize];
                     loc = next;
@@ -128,6 +125,7 @@ void Vector_executeFunc(Vector* restrict vector, uint32_t loc, void * (*func)(vo
                 refactor(vector, (size = (csize * 3) >> 2, size <= 1) ? 1 : size);
             }
         }
+        else *target = newval;
     }
 }
 
