@@ -64,13 +64,11 @@ void Vector_insert(Vector* restrict vector, uint32_t loc , createFunc creator , 
     register uint32_t cSize = vector->size;
     register uint32_t count = vector->count;
     if (count == cSize) refactor(vector, (cSize = cSize << 1));
-    if (loc > count)loc = count;
-    register uint32_t cFirst = vector->first;
-    register uint32_t cLast = vector->last;
     register void** bufferHead = vector->head;
+    loc -= (loc > count) * (loc - count);
     if (loc < ((count + 1) >> 1)) {
-        vector->first = cFirst = ((cSize + cFirst) - 1) % cSize;
-        loc = (cFirst + loc) % cSize;
+        register uint32_t cFirst;
+        loc = ((vector->first = cFirst = ((cSize + vector->first) - 1) % cSize) + loc) % cSize;
         while (cFirst != loc) {
             register uint32_t next;
             bufferHead[cFirst] = bufferHead[next = (cFirst + 1) % cSize];
@@ -78,8 +76,9 @@ void Vector_insert(Vector* restrict vector, uint32_t loc , createFunc creator , 
         }
     }
     else {
-        loc = (cFirst + loc) % cSize;
-        vector->last = (cLast + 1) % cSize;
+        register uint32_t cLast;
+        vector->last = ((cLast = vector->last) + 1) % cSize;
+        loc = (vector->first + loc) % cSize;
         while (cLast != loc) {
             register uint32_t next;
             bufferHead[cLast] = bufferHead[next = ((cSize + cLast) - 1) % cSize];
