@@ -55,10 +55,8 @@ static inline instr* checkWhole(void* restrict cell, void* restrict data, const 
     uint16_t offset = start->workmode;
     while((start = start->next) != NULL) {
         compress(data, obj, start->countofjumps, start->jumps);
-        if (memcmp(((struct leaf_cell*)cell)->area + offset, data, start->workmode) == 0) {
-			offset += start->workmode;
-        }
-        else break;
+        if (memcmp(((struct leaf_cell*)cell)->area + offset, data, start->workmode)) break;
+        else offset += start->workmode;
     }
     return start;
 }
@@ -133,7 +131,7 @@ static instr* restrict Fragpath_iterator_READ(struct mthrd_str* path, instr* res
         }
         else break;
     }
-	return element;
+    return element;
 }
 static instr* restrict Fragpath_iterator_WRITE(struct mthrd_str* path, instr* restrict element, void* const restrict dataOfAddress, uint32_t* const restrict arithOut, void** const restrict addressOut, const void* const address, uint8_t* common_count) {
     while (1) {
@@ -149,7 +147,7 @@ static instr* restrict Fragpath_iterator_WRITE(struct mthrd_str* path, instr* re
         path->thrdVar += 1;
         mutex_unlock(&element->Mutex);
 #endif
-		searchVector(&path->array, dataOfAddress, element, &place, &flag);
+        searchVector(&path->array, dataOfAddress, element, &place, &flag);
         if (place != NULL) {
             if (cell_instrcount(place) != 0) {
                 instr* uncommonElement = checkWhole(place, dataOfAddress, address, element);
@@ -390,13 +388,12 @@ static void* restrict makeLeafEx(const void* args) {
 static void * expandCell(void * cell, void * args ) {
     struct leafEx_args newLeaf;
     uint8_t common_count = ((struct cell_args*)args)->common_count;
-    void** common = (void**)malloc(common_count * sizeof(void*));
+    int8_t* common;
     {
-        uint16_t generalOffset = 0;
+        uint16_t commonSize = 0;
         instr* generalInst = ((struct cell_args*)args)->cints;
         for (uint8_t i = 0; i < common_count; i++) {
-            memcpy(common[i] = malloc(generalInst->workmode), ((struct leaf_cell*)cell)->area + generalOffset, generalInst->workmode);
-            generalOffset += generalInst->workmode;
+            commonSize += generalInst->workmode;
             generalInst = generalInst->next;
         }
         newLeaf.newDepth = ((struct leaf_cell*)cell)->instrcount - common_count;
@@ -405,14 +402,15 @@ static void * expandCell(void * cell, void * args ) {
             newLeaf.size += generalInst->workmode;
             generalInst = generalInst->next;
         }
-        newLeaf.uncommon = memcpy(malloc(newLeaf.size), ((struct leaf_cell*)cell)->area + generalOffset, newLeaf.size);
+        common = memcpy(malloc(commonSize), ((struct leaf_cell*)cell)->area, commonSize);
+        newLeaf.uncommon = memcpy(malloc(newLeaf.size), ((struct leaf_cell*)cell)->area + commonSize, newLeaf.size);
     }
     newLeaf.obj = ((struct leaf_cell*)cell)->leaf.context;
     free(cell);
-	cell = malloc(sizeof(struct inner_cell) + ((struct cell_args*)args)->cints->workmode);
+    uint16_t commonIndex = ((struct cell_args*)args)->cints->workmode;
+    cell = malloc(sizeof(struct inner_cell) + commonIndex);
     ((struct inner_cell*)cell)->instrcount = 0;
-    memcpy(((struct inner_cell*)cell)->area, common[0], ((struct cell_args*)args)->cints->workmode);
-    free(common[0]);
+    memcpy(((struct inner_cell*)cell)->area, common, commonIndex);
     Vector_create(&((struct inner_cell*)cell)->mthrd.array, 2);
 #ifdef MultiThread
     ((struct inner_cell*)cell)->mthrd.thrdVar = 0;
@@ -421,11 +419,11 @@ static void * expandCell(void * cell, void * args ) {
         void* cellBelow = cell;
         struct inner_args innerEntry = { .cints = ((struct cell_args*)args)->cints->next };
         for (uint8_t i = 1; i < common_count; i++) {
-            innerEntry.common = common[i];
+            innerEntry.common = common + commonIndex;
             Vector_insert(&((struct inner_cell*)cellBelow)->mthrd.array, 0, makeInner, &innerEntry);
             cellBelow = Vector_get(&((struct inner_cell*)cellBelow)->mthrd.array, 0);
+            commonIndex += innerEntry.cints->workmode;
             innerEntry.cints = innerEntry.cints->next;
-            free(common[i]);
         }
         free(common);
         Vector_insert(&((struct inner_cell*)cellBelow)->mthrd.array, 0, makeLeafEx, &newLeaf);
@@ -760,9 +758,9 @@ void Fragpath_create(Fragpath* fragpath,const seginfo* restrict objectStruct,uin
                 newseg[0] = objectStruct[f][0];
                 if (currentSeg == NULL || newseg[0] != (*currentSeg)[0] + (*currentSeg)[1]) {
                     LinkedList_insert(&map, -1, DS_cpy, &cpArgs);
-					currentSeg = (seginfo*)LinkedList_get(&map, -1);
+                    currentSeg = (seginfo*)LinkedList_get(&map, -1);
                 }
-				else (*currentSeg)[1] += newseg[1];
+                else (*currentSeg)[1] += newseg[1];
                 f += 1;
             } while ((newseg[1] = objectStruct[f][1]) != 0);
         }
@@ -776,14 +774,14 @@ void Fragpath_create(Fragpath* fragpath,const seginfo* restrict objectStruct,uin
             lastitem[1] = (*currentTail)[1];
             for (uint8_t i = 1; i < arrayCount; ++i) {
                 for (uint8_t k = 0; k < f; k++) {
-					if (f - k > 1)last = (seginfo*)LinkedList_get(&map, k);
-					else last = &lastitem;
-					finalseg[0] = (*last)[0] + (i * objBytes);
-					finalseg[1] = (*last)[1];
-					if (finalseg[0] == (*currentTail)[0] + (*currentTail)[1])(*currentTail)[1] += finalseg[1];
+                    if (f - k > 1)last = (seginfo*)LinkedList_get(&map, k);
+                    else last = &lastitem;
+                    finalseg[0] = (*last)[0] + (i * objBytes);
+                    finalseg[1] = (*last)[1];
+                    if (finalseg[0] == (*currentTail)[0] + (*currentTail)[1])(*currentTail)[1] += finalseg[1];
                     else {
                         LinkedList_insert(&map, -1, DS_cpy, &cpArgs);
-						currentTail = (seginfo*)LinkedList_get(&map, -1);
+                        currentTail = (seginfo*)LinkedList_get(&map, -1);
                     }
                 }
             }
