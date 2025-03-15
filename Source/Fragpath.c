@@ -99,7 +99,8 @@ static void searchVector(Vector* array, const void* dataOfAddress,instr * restri
 }
 
 static instr* restrict Fragpath_iterator_READ(struct mthrd_str* path, instr* restrict element, void* const restrict dataOfAddress, void** const restrict addressOut, const void* const address) {
-    while (1) {
+    uint8_t loopvar;
+    do {
         void* place;
         uint32_t flag;
         compress(dataOfAddress, address, element->countofjumps, element->jumps);
@@ -110,31 +111,34 @@ static instr* restrict Fragpath_iterator_READ(struct mthrd_str* path, instr* res
         mutex_unlock(&element->Mutex);
 #endif
         searchVector(&path->array, dataOfAddress, element, &place, &flag);
-#ifdef MultiThread
-        mutex_lock(&element->Mutex);
-        path->thrdVar -= 2;
-        if (!(path->thrdVar >> 1)) cond_broadcast(&element->CNDR);
-        mutex_unlock(&element->Mutex);
-#endif
+        instr* restrict oldElement = element;
+        struct mthrd_str* oldPath = path;
         if (place != NULL) {
             if (cell_instrcount(place) != 0) {
                 instr* uncommonElement = checkWhole(place, dataOfAddress, address, element);
                 *addressOut = &((struct leaf_cell*)place)->leaf;
                 element = uncommonElement;
-                break;
+                loopvar = 0;
             }
             else {
                 element = element->next;
                 path = &((struct inner_cell*)place)->mthrd;
-                continue;
+                loopvar = 1;
             }
         }
-        else break;
-    }
+        else loopvar = 0;
+#ifdef MultiThread
+        mutex_lock(&oldElement->Mutex);
+        oldPath->thrdVar -= 2;
+        if (!(oldPath->thrdVar >> 1)) cond_broadcast(&oldElement->CNDR);
+        mutex_unlock(&oldElement->Mutex);
+#endif
+    } while (loopvar);
     return element;
 }
 static instr* restrict Fragpath_iterator_WRITE(struct mthrd_str* path, instr* restrict element, void* const restrict dataOfAddress, uint32_t* const restrict arithOut, void** const restrict addressOut, const void* const address, uint8_t* common_count) {
-    while (1) {
+    uint8_t loopvar;
+    do {
         void* place;
         uint32_t flag;
         compress(dataOfAddress, address, element->countofjumps, element->jumps);
@@ -148,26 +152,21 @@ static instr* restrict Fragpath_iterator_WRITE(struct mthrd_str* path, instr* re
         mutex_unlock(&element->Mutex);
 #endif
         searchVector(&path->array, dataOfAddress, element, &place, &flag);
-        if (place != NULL) {
-            if (cell_instrcount(place) != 0) {
-                instr* uncommonElement = checkWhole(place, dataOfAddress, address, element);
-                if (uncommonElement != NULL) {
-                    *common_count = 0;
-                    instr* tempElement = element;
-                    do *common_count += 1; while ((tempElement = tempElement->next) != uncommonElement);
-                    *addressOut = path;
-                    *arithOut = flag;
-                }
-                else {
-#ifdef MultiThread
-                    mutex_lock(&element->Mutex);
-                    path->thrdVar -= 1;
-                    cond_broadcast(&element->CNDW);
-                    mutex_unlock(&element->Mutex);
-#endif
-                    element = NULL;
-                }
-                break;
+        if (place == NULL) {
+            *arithOut = flag;
+            *addressOut = path;
+            *common_count = 0;
+            loopvar = 0;
+        }
+        else {
+            instr* uncommonElement;
+            if (cell_instrcount(place) != 0 && (uncommonElement = checkWhole(place, dataOfAddress, address, element)) != NULL) {
+                *common_count = 0;
+                instr* tempElement = element;
+                do *common_count += 1; while ((tempElement = tempElement->next) != uncommonElement);
+                *addressOut = path;
+                *arithOut = flag;
+                loopvar = 0;
             }
             else {
 #ifdef MultiThread
@@ -176,24 +175,25 @@ static instr* restrict Fragpath_iterator_WRITE(struct mthrd_str* path, instr* re
                 cond_broadcast(&element->CNDW);
                 mutex_unlock(&element->Mutex);
 #endif
-                element = element->next;
-                path = &((struct inner_cell*)place)->mthrd;
-                continue;
+                if (cell_instrcount(place) == 0) {
+                    element = element->next;
+                    path = &((struct inner_cell*)place)->mthrd;
+                    loopvar = 1;
+                }
+                else {
+                    element = NULL;
+                    loopvar = 0;
+                }
             }
         }
-        else {
-            *arithOut = flag;
-            *addressOut = path;
-            *common_count = 0;
-            break;
-        }
-    }
+    } while (loopvar);
     return element;
 }
 
 static instr* restrict Fragpath_iterator_ERASE(struct mthrd_str* path, instr* restrict element, void* const restrict dataOfAddress, uint32_t* const restrict arithOut, void** const restrict addressOut, const void* const address) {
     uint8_t erase_state = 0;
-    while (1) {
+    uint8_t loopvar;
+    do {
         void* place;
         uint32_t flag;
         if (erase_state) {
@@ -230,67 +230,42 @@ static instr* restrict Fragpath_iterator_ERASE(struct mthrd_str* path, instr* re
 #endif
         }
         searchVector(&path->array, dataOfAddress, element, &place, &flag);
-        if (place != NULL) {
-            if (cell_instrcount(place) != 0) {
-                instr* uncommonElement = checkWhole(place, dataOfAddress, address, element);
-                if (uncommonElement != NULL) {
-                    *(addressOut + 1) = NULL;
-#ifdef MultiThread
-                    mutex_lock(&element->Mutex);
-                    path->thrdVar -= 1;
-                    cond_broadcast(&element->CNDW);
-                    mutex_unlock(&element->Mutex);
-#endif
-                }
-                else {
-                    if (erase_state == 0) {
-                        *addressOut = path;
-                        *arithOut = flag;
-                    }
-#ifdef MultiThread
-                    else {
-                        mutex_lock(&element->Mutex);
-                        path->thrdVar -= 1;
-                        cond_broadcast(&element->CNDW);
-                        mutex_unlock(&element->Mutex);
-
-                    }
-#endif
-                }
-                element = uncommonElement;
-                break;
-            }
-            else {
-                if (erase_state == 0) {
-                    *arithOut = flag;
-                    *addressOut = path;
-                    erase_state = 1;
-                }
-#ifdef MultiThread
-                else {
-                    mutex_lock(&element->Mutex);
-                    path->thrdVar -= 1;
-                    cond_broadcast(&element->CNDW);
-                    mutex_unlock(&element->Mutex);
-                }
-#endif
-                *(addressOut + 1) = &((struct inner_cell*)place)->mthrd.array;
-                element = element->next;
-                path = &((struct inner_cell*)place)->mthrd;
-                continue;
-            }
-        }
-        else {
+        if (place == NULL || (cell_instrcount(place) != 0 && checkWhole(place, dataOfAddress, address, element) != NULL)) {
 #ifdef MultiThread
             mutex_lock(&element->Mutex);
             path->thrdVar -= 1;
             cond_broadcast(&element->CNDW);
             mutex_unlock(&element->Mutex);
 #endif
-            *(addressOut + 1) = NULL;
-            break;
+            * (addressOut + 1) = NULL;
+            loopvar = 0;
         }
-    }
+        else {
+            if (erase_state == 0) {
+                *arithOut = flag;
+                *addressOut = path;
+                erase_state = 1;
+            }
+#ifdef MultiThread
+            else {
+                mutex_lock(&element->Mutex);
+                path->thrdVar -= 1;
+                cond_broadcast(&element->CNDW);
+                mutex_unlock(&element->Mutex);
+            }
+#endif
+            if (cell_instrcount(place) == 0) {
+                *(addressOut + 1) = &((struct inner_cell*)place)->mthrd.array;
+                element = element->next;
+                path = &((struct inner_cell*)place)->mthrd;
+                loopvar = 1;
+            }
+            else {
+                element = NULL;
+                loopvar = 0;
+            }
+        }
+    } while (loopvar);
     return element;
 }
 
