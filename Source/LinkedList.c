@@ -158,7 +158,7 @@ void LinkedList_swap(LinkedList* restrict base,uint32_t location1,uint32_t locat
 uint32_t LinkedList_count(LinkedList* restrict base){
     return base->size;
 }
-void LinkedList_create(LinkedList* res){
+void LinkedList_init(LinkedList* res){
     res->head = NULL;
     res->tail = NULL;
     res->size = 0;

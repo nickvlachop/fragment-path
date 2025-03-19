@@ -141,6 +141,15 @@ void Vector_swap(Vector* restrict vector, uint32_t pos1, uint32_t pos2) {
     return;
 }
 
+void Vector_transfer(Vector* restrict dest, Vector* restrict src) {
+    dest->head = src->head;
+    dest->first = src->first;
+    dest->last = src->last;
+    dest->count = src->count;
+    dest->size = src->size;
+    src->head = NULL;
+}
+
 void Vector_clear(Vector* restrict vector, void* (*func)(void*, void*), void* args){
     uint32_t i = 0;
     while (i < vector->count) func(vector->head[(vector->first + i++) % vector->size],args);
@@ -157,7 +166,7 @@ void Vector_destroy(Vector* restrict vector , void* (*func)(void*, void*), void*
     free(vector->head);
     return;
 }
-void Vector_create(Vector * res ,uint32_t size){
+void Vector_init(Vector * res ,uint32_t size){
     res->size = 1 + (size > 1) * (size - 1);
     res->head = (void**)malloc(res->size * sizeof(void*));
     res->count = 0;

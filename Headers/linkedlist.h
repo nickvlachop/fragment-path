@@ -10,7 +10,7 @@ typedef struct LinkedList_str {
 //The linked list functions behave identical to the vector' functions
 //Functions with index argument treat an out of bounds index as the index of the last element
 
-void LinkedList_create(LinkedList* res);
+void LinkedList_init(LinkedList* res);
 //Adds an element at the specified index , values greater than the number of elements inside the linked list implies an append operation
 void LinkedList_insert(LinkedList* restrict base, uint32_t loc, createFunc creator , const void* cont);
 //Get the element in the specified index or NULL when no elements are present
