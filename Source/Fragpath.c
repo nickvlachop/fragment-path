@@ -226,9 +226,7 @@ static instr* restrict Fragpath_iterator_WRITE(
                     path = &((struct inner_cell*)place)->mthrd;
                     loopvar = 1;
                 }
-                else {
-                    loopvar = 0;
-                }
+                else loopvar = 0;
                 *priorplace = place;
 #ifdef MultiThread
                 *priorInstr = element;
@@ -338,9 +336,7 @@ static instr* restrict Fragpath_iterator_ERASE(
                 path = &((struct inner_cell*)place)->mthrd;
                 loopvar = 1;
             }
-            else {
-                loopvar = 0;
-            }
+            else loopvar = 0;
 #ifdef MultiThread
             *priorplace = place;
             *priorInstr = element;
@@ -591,7 +587,6 @@ void Fragpath_executeFunc(Fragpath* fragpath, const void* obj , void * (*func)(v
                 if ((((struct generic_cell*)upperPlace[i])->cellProtector -= 1) == 0)cond_broadcast(&priorInstr[i]->CND_CELL);
                 mutex_unlock(&priorInstr[i]->Mutex);
             }
-            
 #endif
             break;
         }
