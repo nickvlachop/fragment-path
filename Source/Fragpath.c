@@ -259,33 +259,21 @@ static instr* restrict Fragpath_iterator_ERASE(
     do {
         void* place;
         uint32_t flag;
-        if (erase_state) {
 #ifdef MultiThread
-            mutex_lock(&element->Mutex);
-            while (path->thrdVar >> 1 || path->thrdVar & 1) cond_sleep(&element->CND, &element->Mutex);
-            if (Vector_count(&path->array) > 1) {
-                mutex_unlock(&element->Mutex);
-                break;
-            }
-            else {
-                path->thrdVar += 1;
-                mutex_unlock(&element->Mutex);
-                compress(dataOfAddress, address, element->countofjumps, element->jumps);
-            }
-#else
-            if (Vector_count(&path->array) > 1)break;
-            else compress(dataOfAddress, address, element->countofjumps, element->jumps);
-#endif
-        }
-        else {
-            compress(dataOfAddress, address, element->countofjumps, element->jumps);
-#ifdef MultiThread
+        {
+            uint8_t leave = 0;
             mutex_lock(&element->Mutex);
             while (path->thrdVar >> 1 || path->thrdVar & 1)cond_sleep(&element->CND, &element->Mutex);
-            path->thrdVar += 1;
+            if (erase_state && Vector_count(&path->array) > 1) leave = 1;
+            else path->thrdVar += 1;
             mutex_unlock(&element->Mutex);
-#endif
+            if (!leave)compress(dataOfAddress, address, element->countofjumps, element->jumps);
+            else break;
         }
+#else
+        if (erase_state && Vector_count(&path->array) > 1) break;
+        else compress(dataOfAddress, address, element->countofjumps, element->jumps);
+#endif
         searchVector(&path->array, dataOfAddress, element, &place, &flag);
         instr* uncommonElement = NULL;
         uint8_t dist = 0;
@@ -299,6 +287,11 @@ static instr* restrict Fragpath_iterator_ERASE(
             mutex_lock(&element->Mutex);
             path->thrdVar -= 1;
             cond_broadcast(&element->CND);
+            if (*priorInstr) {
+                mutex_lock(&(*priorInstr)->Mutex);
+                if ((((struct generic_cell*)*priorplace)->cellProtector -= 1) == 0)cond_broadcast(&(*priorInstr)->CND_CELL);
+                mutex_unlock(&(*priorInstr)->Mutex);
+            }
             mutex_unlock(&element->Mutex);
 #endif
             *(addressOut + 1) = NULL;
@@ -562,15 +555,15 @@ void* Fragpath_contains(Fragpath* fragpath, const void* obj){
 void Fragpath_executeFunc(Fragpath* fragpath, const void* obj , void * (*func)(void * , void *),void * args){
     instr* previous = fragpath->objStructSizes;
 #ifdef MultiThread
-    instr* priorInstr[2] = { [1] = NULL };
-    void* upperPlace[2] = {[1] = NULL };
+    instr* priorInstrPrev = NULL,* priorInstrCurrent;
+    void* upperPlacePrev = NULL ,* upperPlaceCurrent;
 #endif
     void* data = malloc(fragpath->largestByte);
     void* pinstr[2] = { [0] = NULL , [1] = (struct mthrd_str *)&fragpath->array};
     while (1) {
         uint32_t place;
 #ifdef MultiThread
-        instr* next = Fragpath_iterator_ERASE((struct mthrd_str *)pinstr[1], previous,data, &place, pinstr, obj, priorInstr,&upperPlace[0]);
+        instr* next = Fragpath_iterator_ERASE((struct mthrd_str *)pinstr[1], previous,data, &place, pinstr, obj, &priorInstrCurrent,&upperPlaceCurrent);
 #else
         instr* next = Fragpath_iterator_ERASE((struct mthrd_str*)pinstr[1], previous, data, &place, pinstr, obj);
 #endif
@@ -582,46 +575,39 @@ void Fragpath_executeFunc(Fragpath* fragpath, const void* obj , void * (*func)(v
                 cond_broadcast(&previous->CND);
                 mutex_unlock(&previous->Mutex);
             }
-            for(uint8_t i = 0 ; i < 2 ;i++) if (priorInstr[i]) {
-                mutex_lock(&priorInstr[i]->Mutex);
-                if ((((struct generic_cell*)upperPlace[i])->cellProtector -= 1) == 0)cond_broadcast(&priorInstr[i]->CND_CELL);
-                mutex_unlock(&priorInstr[i]->Mutex);
+            if (priorInstrPrev) {
+                mutex_lock(&priorInstrPrev->Mutex);
+                if ((((struct generic_cell*)upperPlacePrev)->cellProtector -= 1) == 0)cond_broadcast(&priorInstrPrev->CND_CELL);
+                mutex_unlock(&priorInstrPrev->Mutex);
             }
-#endif
-            break;
-        }
-        else if (next == NULL) {
-            struct disposeCond disposal = {.freeFunc = func , .freeArgs = args , .clearAll = 0};
-            Vector_executeFunc(&((struct mthrd_str*)pinstr[0])->array, place, executeIn,&disposal);
-#ifdef MultiThread
-            mutex_lock(&previous->Mutex);
-            ((struct mthrd_str*)pinstr[0])->thrdVar -= 1;
-            cond_broadcast(&previous->CND);
-            if (priorInstr[1]) {
-                mutex_lock(&priorInstr[1]->Mutex);
-                if ((((struct generic_cell*)upperPlace[1])->cellProtector -= 1) == 0)cond_broadcast(&priorInstr[1]->CND_CELL);
-                mutex_unlock(&priorInstr[1]->Mutex);
-            }
-            mutex_unlock(&previous->Mutex);
 #endif
             break;
         }
         else {
+            if (next == NULL) {
+                struct disposeCond disposal = { .freeFunc = func , .freeArgs = args , .clearAll = 0 };
+                Vector_executeFunc(&((struct mthrd_str*)pinstr[0])->array, place, executeIn, &disposal);
+            }
 #ifdef MultiThread
             mutex_lock(&previous->Mutex);
             ((struct mthrd_str*)pinstr[0])->thrdVar -= 1;
             cond_broadcast(&previous->CND);
-            mutex_unlock(&previous->Mutex);
-            if (priorInstr[1]) {
-                mutex_lock(&priorInstr[1]->Mutex);
-                if( (((struct generic_cell*)upperPlace[1])->cellProtector -= 1) == 0)cond_broadcast(&priorInstr[1]->CND_CELL);
-                mutex_unlock(&priorInstr[1]->Mutex);
+            if (priorInstrPrev) {
+                mutex_lock(&priorInstrPrev->Mutex);
+                if ((((struct generic_cell*)upperPlacePrev)->cellProtector -= 1) == 0)cond_broadcast(&priorInstrPrev->CND_CELL);
+                mutex_unlock(&priorInstrPrev->Mutex);
             }
-            upperPlace[1] = upperPlace[0];
-            priorInstr[1] = priorInstr[0];
+            mutex_unlock(&previous->Mutex);
 #endif
-            pinstr[0] = NULL;
-            previous = next;
+            if (next != NULL) {
+#ifdef MultiThread
+                upperPlacePrev = upperPlaceCurrent;
+                priorInstrPrev = priorInstrCurrent;
+#endif
+                pinstr[0] = NULL;
+                previous = next;
+            }
+            else break;
         }
     }
     free(data);
