@@ -123,12 +123,12 @@ void LinkedList_executeFunc(LinkedList* restrict base, uint32_t loc, void* (*fun
 void LinkedList_swap(LinkedList* restrict base,uint32_t location1,uint32_t location2){
     uint32_t loc1, loc2 , diff;
     if (location1 > location2){
-        loc1 = (location1 >= base->size) * ((base->size - 1) - location1) + location1;
-        loc2 = (location2 >= base->size) * ((base->size - 1) - location2) + location2;
+        loc1 = (-(location1 >= base->size) & ((base->size - 1)) - location1) + location1;
+        loc2 = (-(location2 >= base->size) & ((base->size - 1)) - location2) + location2;
     }
     else{
-        loc1 = (location2 >= base->size) * ((base->size - 1) - location2) + location2;
-        loc2 = (location1 >= base->size) * ((base->size - 1) - location1) + location1;
+        loc1 = (-(location2 >= base->size) & ((base->size - 1)) - location2) + location2;
+        loc2 = (-(location1 >= base->size) & ((base->size - 1)) - location1) + location1;
     }
     diff = loc1 - loc2;
     if(diff){

@@ -55,10 +55,12 @@ struct leaf_cell {
     int8_t area[];
 };
 
+#define seloffset(x) (((-((struct generic_cell*)x)->cell_type) & offsetof(struct leaf_cell, area)) | ((((struct generic_cell*)x)->cell_type - 1) & offsetof(struct inner_cell, area)))
+
 static instr* checkWhole(void* restrict cell, void* restrict data, const void* obj, instr* restrict start) {
     uint16_t offset = start->workmode;
     uint8_t limit = ((struct generic_cell *)cell)->instrcount;
-    int8_t* dataOfCell = (uint8_t*)cell + (((struct generic_cell*)cell)->cell_type ? offsetof(struct leaf_cell, area) : offsetof(struct inner_cell, area));
+    int8_t* dataOfCell = (uint8_t*)cell + seloffset(cell);
     while (start = start->next , --limit) {
         compress(data, obj, start->countofjumps, start->jumps);
         if (memcmp(dataOfCell + offset, data, start->workmode)) break;
@@ -72,18 +74,10 @@ static void searchVector(Vector* array, const void* dataOfAddress,instr * restri
     if (count) {
         int result;
         count -= 1;
-        if (*place = Vector_get(array, (*flag = 0)) , 
-            !(result = memcmp((char*)(*place)+ (((struct generic_cell*)*place)->cell_type ? (offsetof(struct leaf_cell, area)) : offsetof(struct inner_cell, area) ), dataOfAddress, element->workmode)));
-        else if (!count || result > 0) {
-            *flag = result < 0;
-            *place = NULL;
-        }
-        else if (*place = Vector_get(array, (*flag = count)),
-            !(result = memcmp((char*)(*place)+ (((struct generic_cell*)*place)->cell_type ? (offsetof(struct leaf_cell, area)) : offsetof(struct inner_cell, area)), dataOfAddress, element->workmode)));
-        else if (result < 0) {
-            *flag = count + 1;
-            *place = NULL;
-        }
+        if (*place = Vector_get(array, (*flag = 0)),!(result = memcmp((char*)(*place) + seloffset(*place), dataOfAddress, element->workmode)));
+        else if (!count || result > 0) {*flag = result < 0;*place = NULL;}
+        else if (*place = Vector_get(array, (*flag = count)),!(result = memcmp((char*)(*place)+ seloffset(*place), dataOfAddress, element->workmode)));
+        else if (result < 0) {*flag = count + 1;*place = NULL;}
         else {
             uint32_t offset = 0;
             while (1)
@@ -92,8 +86,7 @@ static void searchVector(Vector* array, const void* dataOfAddress,instr * restri
                     *place = NULL;
                     break;
                 }
-                else if (*place = Vector_get(array, (*flag = (count + offset) >> 1)),
-                    !(result = memcmp((char*)(*place)+ (((struct generic_cell*)*place)->cell_type ? (offsetof(struct leaf_cell, area)) : offsetof(struct inner_cell, area)), dataOfAddress, element->workmode)))break;
+                else if (*place = Vector_get(array, (*flag = (count + offset) >> 1)),!(result = memcmp((char*)(*place)+ seloffset(*place), dataOfAddress, element->workmode)))break;
                 else if (result > 0) count = *flag;
                 else offset = *flag;
         }
@@ -103,7 +96,7 @@ static void searchVector(Vector* array, const void* dataOfAddress,instr * restri
         *place = NULL;
     }
 }
-
+#undef seloffset
 static instr* restrict Fragpath_iterator_READ(struct mthrd_str* path,
     instr* restrict element,
     void* const restrict dataOfAddress,
@@ -437,7 +430,7 @@ static void * expandCell(void * cell, void * args ) {
     uint8_t common_count = ((struct cell_args*)args)->common_count;
     uint8_t type = ((struct generic_cell*)cell)->cell_type;
     uint16_t commonSize = 0;
-    uint8_t arreaOffset = type != 0 ? offsetof(struct leaf_cell, area) : offsetof(struct inner_cell, area);
+    uint8_t arreaOffset = ((-type) & offsetof(struct leaf_cell, area)) | ((type - 1) & offsetof(struct inner_cell, area));
     {
         instr* generalInst = ((struct cell_args*)args)->cints;
         for (uint8_t i = 0; i < common_count; i++) {
@@ -762,10 +755,10 @@ static instr* Fragpath_init(LinkedList* const actualbytes, uint16_t* const restr
         cpyArg.obj = &currJumpOp;
         LinkedList_init(&command);
         for (uint8_t i = 0 , temp = 1; i < segcount; ++i) while (bytesPerSegm[i]) {
-            uint16_t maxStep = bytes - ((temp < bytes) * (bytes - temp));
+            uint16_t maxStep = bytes - (-(temp < bytes) & (bytes - temp));
             bytes -= maxStep;
             temp = temp << 1;
-            *largeOut = *largeOut + (*largeOut < maxStep) * (maxStep - *largeOut);
+            *largeOut += -(*largeOut < maxStep) & (maxStep - *largeOut);
             {
                 uint8_t currentJump;
                 {
