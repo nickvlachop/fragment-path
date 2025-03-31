@@ -7,8 +7,9 @@ typedef struct instruction {
     struct instruction* next;
 #ifdef MultiThread
     mutex_var Mutex;
-    cond_var CND;
-    cond_var CND_CELL;
+    cond_var CND_R;
+    cond_var CND_W;
+    cond_var CND_exp;
 #endif
     uint16_t countofjumps;
     uint16_t workmode;
@@ -32,7 +33,9 @@ static void compress(void* const result, const void* const addresses, const uint
 struct mthrd_str {
     Vector array;
 #ifdef MultiThread
-    uint8_t thrdVar;
+    uint8_t thrd_active_count;
+    uint8_t writercount;
+    uint8_t readercount;
 #endif
 };
 struct generic_cell {
@@ -118,20 +121,22 @@ static instr* restrict Fragpath_iterator_READ(struct mthrd_str* path,
         compress(dataOfAddress, address, element->countofjumps, element->jumps);
 #ifdef MultiThread
         mutex_lock(&element->Mutex);
-        while (path->thrdVar & 1)cond_sleep(&element->CND, &element->Mutex);
-        path->thrdVar += 2;
+        path->readercount += 1;
+        if(path->thrd_active_count & 1)cond_sleep(&element->CND_R, &element->Mutex);
+        path->readercount -= 1;
+        path->thrd_active_count += 2;
         mutex_unlock(&element->Mutex);
 #endif
         searchVector(&path->array, dataOfAddress, element, &place, &flag);
 #ifdef MultiThread
         mutex_lock(&element->Mutex);
-        path->thrdVar -= 2;
-        if (!(path->thrdVar >> 1)) cond_broadcast(&element->CND);
-        if (place)((struct generic_cell*)place)->cellProtector += 1;
+        path->thrd_active_count -= 2;
+        if (!path->thrd_active_count && path->writercount)cond_signal(&element->CND_W);
+        if (place)((struct generic_cell*)place)->cellProtector += 2;
         mutex_unlock(&element->Mutex);
         if (*priorInstr) {
             mutex_lock(&(*priorInstr)->Mutex);
-            if ((((struct generic_cell*)*priorplace)->cellProtector -= 1) == 0)cond_broadcast(&(*priorInstr)->CND_CELL);
+            if ((((struct generic_cell*)*priorplace)->cellProtector -= 2) & 1)cond_signal(&(*priorInstr)->CND_exp);
             mutex_unlock(&(*priorInstr)->Mutex);
         }
 #endif
@@ -182,8 +187,10 @@ static instr* restrict Fragpath_iterator_WRITE(
         compress(dataOfAddress, address, element->countofjumps, element->jumps);
 #ifdef MultiThread
         mutex_lock(&element->Mutex);
-        while (path->thrdVar >> 1 || path->thrdVar & 1)cond_sleep(&element->CND, &element->Mutex);
-        path->thrdVar += 1;
+        path->writercount += 1;
+        if(path->thrd_active_count)cond_sleep(&element->CND_W, &element->Mutex);
+        path->writercount -= 1;
+        path->thrd_active_count += 1;
         mutex_unlock(&element->Mutex);
 #endif
         searchVector(&path->array, dataOfAddress, element, &place, &flag);
@@ -205,12 +212,13 @@ static instr* restrict Fragpath_iterator_WRITE(
             else {
 #ifdef MultiThread
                 mutex_lock(&element->Mutex);
-                path->thrdVar -= 1;
-                cond_broadcast(&element->CND);
-                ((struct generic_cell*)place)->cellProtector += 1;
+                path->thrd_active_count -= 1;
+                if (path->writercount)cond_signal(&element->CND_W);
+                else if (path->readercount)cond_broadcast(&element->CND_R);
+                ((struct generic_cell*)place)->cellProtector += 2;
                 if (*priorInstr) {
                     mutex_lock(&(*priorInstr)->Mutex);
-                    if ((((struct generic_cell*)*priorplace)->cellProtector -= 1) == 0) cond_broadcast(&(*priorInstr)->CND_CELL);
+                    if ((((struct generic_cell*)*priorplace)->cellProtector -= 2) & 1)cond_signal(&(*priorInstr)->CND_exp);
                     mutex_unlock(&(*priorInstr)->Mutex);
                 }
                 mutex_unlock(&element->Mutex);
@@ -256,9 +264,11 @@ static instr* restrict Fragpath_iterator_ERASE(
         {
             uint8_t leave = 0;
             mutex_lock(&element->Mutex);
-            while (path->thrdVar >> 1 || path->thrdVar & 1)cond_sleep(&element->CND, &element->Mutex);
+            path->writercount += 1;
+            if(path->thrd_active_count)cond_sleep(&element->CND_W, &element->Mutex);
+            path->writercount -= 1;
             if (erase_state && Vector_count(&path->array) > 1) leave = 1;
-            else path->thrdVar += 1;
+            else path->thrd_active_count += 1;
             mutex_unlock(&element->Mutex);
             if (!leave)compress(dataOfAddress, address, element->countofjumps, element->jumps);
             else break;
@@ -278,11 +288,12 @@ static instr* restrict Fragpath_iterator_ERASE(
         if (place == NULL || ((struct generic_cell*)place)->instrcount != dist) {
 #ifdef MultiThread
             mutex_lock(&element->Mutex);
-            path->thrdVar -= 1;
-            cond_broadcast(&element->CND);
+            path->thrd_active_count -= 1;
+            if (path->writercount)cond_signal(&element->CND_W);
+            else if (path->readercount)cond_broadcast(&element->CND_R);
             if (*priorInstr) {
                 mutex_lock(&(*priorInstr)->Mutex);
-                if ((((struct generic_cell*)*priorplace)->cellProtector -= 1) == 0)cond_broadcast(&(*priorInstr)->CND_CELL);
+                if ((((struct generic_cell*)*priorplace)->cellProtector -= 2) & 1)cond_signal(&(*priorInstr)->CND_exp);
                 mutex_unlock(&(*priorInstr)->Mutex);
             }
             mutex_unlock(&element->Mutex);
@@ -300,13 +311,14 @@ static instr* restrict Fragpath_iterator_ERASE(
             }
             else {
                 mutex_lock(&element->Mutex);
-                path->thrdVar -= 1;
-                cond_broadcast(&element->CND);
+                path->thrd_active_count -= 1;
+                if (path->writercount)cond_signal(&element->CND_W);
+                else if (path->readercount)cond_broadcast(&element->CND_R);
             }
-            ((struct generic_cell*)place)->cellProtector += 1;
+            ((struct generic_cell*)place)->cellProtector += 2;
             if (*priorInstr) {
                 mutex_lock(&(*priorInstr)->Mutex);
-                if ((((struct generic_cell*)*priorplace)->cellProtector -= 1) == 0)cond_broadcast(&(*priorInstr)->CND_CELL);
+                if ((((struct generic_cell*)*priorplace)->cellProtector -= 2) & 1)cond_signal(&(*priorInstr)->CND_exp);
                 mutex_unlock(&(*priorInstr)->Mutex);
             }
             mutex_unlock(&element->Mutex);
@@ -423,7 +435,9 @@ static void* restrict makeLeafEx(const void* args) {
 static void * expandCell(void * cell, void * args ) {
 #ifdef MultiThread
     mutex_lock(&((struct cell_args*)args)->cints->Mutex);
-    while (((struct generic_cell*)cell)->cellProtector) cond_sleep(&((struct cell_args*)args)->cints->CND_CELL, &((struct cell_args*)args)->cints->Mutex);
+    ((struct generic_cell*)cell)->cellProtector += 1;
+    if (((struct generic_cell*)cell)->cellProtector & (~1)) cond_sleep(&((struct cell_args*)args)->cints->CND_exp, &((struct cell_args*)args)->cints->Mutex);
+    ((struct generic_cell*)cell)->cellProtector -= 1;
     mutex_unlock(&((struct cell_args*)args)->cints->Mutex);
 #endif
     struct leafEx_args newLeaf;
@@ -455,7 +469,9 @@ static void * expandCell(void * cell, void * args ) {
         memcpy(((struct inner_cell*)cell)->area, common, commonSize);
         Vector_init(&((struct inner_cell*)cell)->mthrd.array, 2);
 #ifdef MultiThread
-        ((struct inner_cell*)cell)->mthrd.thrdVar = 0;
+        ((struct inner_cell*)cell)->mthrd.thrd_active_count = 0;
+        ((struct inner_cell*)cell)->mthrd.readercount = 0;
+        ((struct inner_cell*)cell)->mthrd.writercount = 0;
         ((struct inner_cell*)cell)->parent.cellProtector = 0;
 #endif
         Vector_insert(&((struct inner_cell*)cell)->mthrd.array, 0, makeLeafEx, &newLeaf);
@@ -464,7 +480,9 @@ static void * expandCell(void * cell, void * args ) {
     else {
         struct inner_cell* belowcell = malloc(sizeof(struct inner_cell) + newLeaf.size);
 #ifdef MultiThread
-        belowcell->mthrd.thrdVar = 0;
+        belowcell->mthrd.thrd_active_count = 0;
+        belowcell->mthrd.readercount = 0;
+        belowcell->mthrd.writercount = 0;
         belowcell->parent.cellProtector = 0;
 #endif
         belowcell->parent.instrcount = newLeaf.newDepth;
@@ -508,15 +526,16 @@ void Fragpath_insert(Fragpath* fragpath, const void* obj , createFunc creator , 
         else Vector_insert(&realStruct->array, place, makeLeaf, &entry);
 #ifdef MultiThread
         mutex_lock(&firstInstr->Mutex);
-        realStruct->thrdVar -= 1;
-        cond_broadcast(&firstInstr->CND);
+        realStruct->thrd_active_count -= 1;
+        if (realStruct->writercount)cond_signal(&firstInstr->CND_W);
+        else if (realStruct->readercount)cond_broadcast(&firstInstr->CND_R);
         mutex_unlock(&firstInstr->Mutex);
 #endif
     }
 #ifdef MultiThread
     if(priorInstr){
         mutex_lock(&priorInstr->Mutex);
-        if((((struct generic_cell*)temp)->cellProtector -= 1) == 0)cond_broadcast(&priorInstr->CND_CELL);
+        if((((struct generic_cell*)temp)->cellProtector -= 2) & 1)cond_signal(&priorInstr->CND_exp);
         mutex_unlock(&priorInstr->Mutex);
     }
 #endif
@@ -537,7 +556,7 @@ void* Fragpath_contains(Fragpath* fragpath, const void* obj){
         destination = *((void**)temp);
 #ifdef MultiThread
         mutex_lock(&priorInstr->Mutex);
-        if((((struct generic_cell*)priorplace)->cellProtector -= 1) == 0)cond_broadcast(&priorInstr->CND_CELL);
+        if((((struct generic_cell*)priorplace)->cellProtector -= 2) & 1)cond_signal(&priorInstr->CND_exp);
         mutex_unlock(&priorInstr->Mutex);
 #endif
     }
@@ -564,13 +583,14 @@ void Fragpath_executeFunc(Fragpath* fragpath, const void* obj , void * (*func)(v
 #ifdef MultiThread
             if (pinstr[0] != NULL) {
                 mutex_lock(&previous->Mutex);
-                ((struct mthrd_str*)pinstr[0])->thrdVar -= 1;
-                cond_broadcast(&previous->CND);
+                ((struct mthrd_str*)pinstr[0])->thrd_active_count -= 1;
+                if (((struct mthrd_str*)pinstr[0])->writercount)cond_signal(&previous->CND_W);
+                else if (((struct mthrd_str*)pinstr[0])->readercount)cond_broadcast(&previous->CND_R);
                 mutex_unlock(&previous->Mutex);
             }
             if (priorInstrPrev) {
                 mutex_lock(&priorInstrPrev->Mutex);
-                if ((((struct generic_cell*)upperPlacePrev)->cellProtector -= 1) == 0)cond_broadcast(&priorInstrPrev->CND_CELL);
+                if ((((struct generic_cell*)upperPlacePrev)->cellProtector -= 2) & 1)cond_signal(&priorInstrPrev->CND_exp);
                 mutex_unlock(&priorInstrPrev->Mutex);
             }
 #endif
@@ -583,11 +603,12 @@ void Fragpath_executeFunc(Fragpath* fragpath, const void* obj , void * (*func)(v
             }
 #ifdef MultiThread
             mutex_lock(&previous->Mutex);
-            ((struct mthrd_str*)pinstr[0])->thrdVar -= 1;
-            cond_broadcast(&previous->CND);
+            ((struct mthrd_str*)pinstr[0])->thrd_active_count -= 1;
+            if (((struct mthrd_str*)pinstr[0])->writercount)cond_signal(&previous->CND_W);
+            else if (((struct mthrd_str*)pinstr[0])->readercount)cond_broadcast(&previous->CND_R);
             if (priorInstrPrev) {
                 mutex_lock(&priorInstrPrev->Mutex);
-                if ((((struct generic_cell*)upperPlacePrev)->cellProtector -= 1) == 0)cond_broadcast(&priorInstrPrev->CND_CELL);
+                if ((((struct generic_cell*)upperPlacePrev)->cellProtector -= 2) & 1)cond_signal(&priorInstrPrev->CND_exp);
                 mutex_unlock(&priorInstrPrev->Mutex);
             }
             mutex_unlock(&previous->Mutex);
@@ -615,8 +636,10 @@ struct common {
 static void getKeys_Rec(instr* instructions, struct mthrd_str * array, struct common* runcfg){
 #ifdef MultiThread
     mutex_lock(&instructions->Mutex);
-    while (array->thrdVar & 1)cond_sleep(&instructions->CND, &instructions->Mutex);
-    array->thrdVar += 2;
+    array->readercount += 1;
+    if (array->thrd_active_count & 1)cond_sleep(&instructions->CND_R, &instructions->Mutex);
+    array->readercount -= 1;
+    array->thrd_active_count += 2;
     mutex_unlock(&instructions->Mutex);
 #endif
     for (uint32_t i = 0, count = Vector_count(&array->array); i < count; i++) {
@@ -653,8 +676,8 @@ static void getKeys_Rec(instr* instructions, struct mthrd_str * array, struct co
     }
 #ifdef MultiThread
     mutex_lock(&instructions->Mutex);
-    array->thrdVar -= 2;
-    if (!(array->thrdVar >> 1)) cond_broadcast(&instructions->CND);
+    array->thrd_active_count -= 2;
+    if (!array->thrd_active_count && array->writercount)cond_signal(&instructions->CND_W);
     mutex_unlock(&instructions->Mutex);
 #endif
 }
@@ -694,13 +717,13 @@ void Fragpath_swap(Fragpath* fragpath, const void* obj1, const void* obj2){
 #ifdef MultiThread
             if (previnstr2) {
                 mutex_lock(&previnstr2->Mutex);
-                if ((((struct generic_cell*)place2)->cellProtector -= 1) == 0)cond_broadcast(&previnstr2->CND_CELL);
+                if ((((struct generic_cell*)place2)->cellProtector -= 2) & 1)cond_signal(&previnstr2->CND_exp);
                 mutex_unlock(&previnstr2->Mutex);
             }
         }
         if (previnstr1) {
             mutex_lock(&previnstr1->Mutex);
-            if ((((struct generic_cell*)place1)->cellProtector -= 1) == 0)cond_broadcast(&previnstr1->CND_CELL);
+            if ((((struct generic_cell*)place1)->cellProtector -= 2) & 1)cond_signal(&previnstr1->CND_exp);
             mutex_unlock(&previnstr1->Mutex);
         }
 #else
@@ -847,8 +870,9 @@ static instr* Fragpath_init(LinkedList* const actualbytes, uint16_t* const restr
             }
 #ifdef MultiThread
             mutex_init(&(*dest)->Mutex);
-            cond_init(&(*dest)->CND);
-            cond_init(&(*dest)->CND_CELL);
+            cond_init(&(*dest)->CND_R);
+            cond_init(&(*dest)->CND_W);
+            cond_init(&(*dest)->CND_exp);
 #endif
             LinkedList_executeFunc(&steplist,0, DS_nullify, NULL);
             dest = &(*dest)->next;
@@ -905,7 +929,9 @@ void Fragpath_create(Fragpath* fragpath,const seginfo* restrict objectStruct,uin
         Vector_init(&fragpath->array,1);
     }
 #ifdef MultiThread
-    fragpath->thrdVar = 0;
+    fragpath->thrd_active_count = 0;
+    fragpath->writercount = 0;
+    fragpath->readercount = 0;
 #endif
     fragpath->bytes = arrayCount * objBytes;
     return;
@@ -920,8 +946,9 @@ void Fragpath_destroy(Fragpath* fragpath, void* (*func)(void*, void*), void* arg
         nextPlace = place->next;
 #ifdef MultiThread
         mutex_destroy(&place->Mutex);
-        cond_destroy(&place->CND);
-        cond_destroy(&place->CND_CELL);
+        cond_destroy(&place->CND_R);
+        cond_destroy(&place->CND_W);
+        cond_destroy(&place->CND_exp);
 #endif
         free(place);
     }
