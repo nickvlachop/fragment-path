@@ -2,7 +2,7 @@
 
 void* DS_nullify(void* cell, void* args) {
     if (args == NULL)free(cell);
-    else if (((struct DS_nullify_args*)args)->delfunc) ((struct DS_nullify_args*)args)->delfunc(cell);
+    else ((void (*)(void*))args)(cell);
     return NULL;
 }
 

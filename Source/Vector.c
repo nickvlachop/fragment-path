@@ -166,7 +166,7 @@ void Vector_clear(Vector* restrict vector, void* (*func)(void*, void*), void* ar
 }
 void Vector_destroy(Vector* restrict vector , void* (*func)(void*, void*), void* args){
     uint32_t i = 0;
-    while (i < vector->count) func(vector->head[uplimit(vector->first + i++ , vector->size)], args);
+    if(func)while (i < vector->count) func(vector->head[uplimit(vector->first + i++ , vector->size)], args);
     free(vector->head);
     return;
 }

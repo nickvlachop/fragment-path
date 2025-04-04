@@ -175,7 +175,7 @@ void LinkedList_destroy(LinkedList* restrict base, void* (*func)(void*, void*), 
     struct cell* position = base->head;
     while (position != NULL) {
         struct cell* next = position->next;
-        func(position->context,args);
+        if(func)func(position->context,args);
         free(position);
         position = next;
     }
