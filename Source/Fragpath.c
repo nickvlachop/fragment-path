@@ -672,7 +672,12 @@ struct common {
     struct DS_cpy_args cpyMethod;
 };
 
-static void getKeys_Rec(instr* instructions, struct mthrd_str * array, struct common* runcfg){
+static void getKeys_Rec(instr* restrict instructions, struct mthrd_str * array, struct common* runcfg
+#ifdef MultiThread
+    ,instr * restrict const previnstr,
+    struct generic_cell * const currentCell
+#endif
+){
 #ifdef MultiThread
     mutex_lock(&instructions->Mutex);
     array->readercount += 1;
@@ -711,12 +716,26 @@ static void getKeys_Rec(instr* instructions, struct mthrd_str * array, struct co
             offset += currentInstr->jumps[k - setback].size;
         }
         if (((struct generic_cell*)cell)->cell_type) LinkedList_insert(&runcfg->list, -1,DS_cpy, &runcfg->cpyMethod);
-        else getKeys_Rec(currentInstr->next, &((struct inner_cell*)cell)->mthrd, runcfg);
+        else {
+#ifdef MultiThread
+            mutex_lock(&instructions->Mutex);
+            cell->cellProtector += 2;
+            mutex_unlock(&instructions->Mutex);
+            getKeys_Rec(currentInstr->next, &((struct inner_cell*)cell)->mthrd, runcfg, instructions, cell);
+#else
+            getKeys_Rec(currentInstr->next, &((struct inner_cell*)cell)->mthrd, runcfg);
+#endif
+        }
     }
 #ifdef MultiThread
     mutex_lock(&instructions->Mutex);
     array->thrd_active_count -= 2;
     if (!array->thrd_active_count && array->writercount)cond_broadcast(&instructions->CND_W);
+    if (previnstr) {
+        mutex_lock(&previnstr->Mutex);
+        if ((currentCell->cellProtector -= 2) == 1)cond_broadcast(&previnstr->CND_exp);
+        mutex_unlock(&previnstr->Mutex);
+    }
     mutex_unlock(&instructions->Mutex);
 #endif
 }
@@ -725,7 +744,11 @@ void* Fragpath_getKeys(Fragpath* fragpath, uint32_t* count){
     cfg.cpyMethod.bytes = fragpath->bytes;
     cfg.cpyMethod.obj = malloc(cfg.cpyMethod.bytes);
     LinkedList_init(&cfg.list);
-    getKeys_Rec(fragpath->objStructSizes, (struct mthrd_str *)&fragpath->array, &cfg);
+#ifdef MultiThread
+    getKeys_Rec(fragpath->objStructSizes, (struct mthrd_str *)&fragpath->array, &cfg,NULL,NULL);
+#else
+    getKeys_Rec(fragpath->objStructSizes, (struct mthrd_str*)&fragpath->array, &cfg);
+#endif
     free(cfg.cpyMethod.obj);
     void* result = malloc(fragpath->bytes * (*count = LinkedList_count(&cfg.list)));
     void* parser = result;
