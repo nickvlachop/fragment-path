@@ -99,7 +99,7 @@ static void searchVector(Vector* array, const void* dataOfAddress,instr * restri
         *place = NULL;
     }
 }
-#undef seloffset
+
 static instr* restrict Fragpath_iterator_READ(struct mthrd_str* path,
     instr* restrict element,
     void* const restrict dataOfAddress,
@@ -691,13 +691,13 @@ static void getKeys_Rec(instr* restrict instructions, struct mthrd_str * array, 
         uint16_t size = instructions->countofjumps;
         {
             instr* tempInst = instructions->next;
-            for (uint8_t i = ((struct generic_cell*)cell)->instrcount; i > 1; i--) {
+            for (uint8_t i = cell->instrcount; i > 1; i--) {
                 size += tempInst->countofjumps;
                 tempInst = tempInst->next;
             }
         }
         uint32_t offset = 0;
-        void* newSource = ((struct generic_cell*)cell)->cell_type ? ((struct leaf_cell *)cell)->area : ((struct inner_cell*)cell)->area;
+        int8_t* newSource = (char *)cell + seloffset(cell);
         instr* currentInstr = instructions;
         uint16_t setback = 0;
         for (uint16_t k = 0; k < size; k++) {
@@ -706,7 +706,7 @@ static void getKeys_Rec(instr* restrict instructions, struct mthrd_str * array, 
                 currentInstr = currentInstr->next;
             }
             void* newDest = (int8_t*)runcfg->cpyMethod.obj + currentInstr->jumps[k - setback].jump;
-            void* finalSource = (int8_t*)newSource + offset;
+            void* finalSource = newSource + offset;
             switch (currentInstr->jumps[k - setback].size) {
                 default:*((int8_t*)newDest) = *((int8_t*)finalSource);break;
                 case Double:*((int16_t*)newDest) = *((int16_t*)finalSource);break;
@@ -715,7 +715,7 @@ static void getKeys_Rec(instr* restrict instructions, struct mthrd_str * array, 
             }
             offset += currentInstr->jumps[k - setback].size;
         }
-        if (((struct generic_cell*)cell)->cell_type) LinkedList_insert(&runcfg->list, -1,DS_cpy, &runcfg->cpyMethod);
+        if (cell->cell_type) LinkedList_insert(&runcfg->list, -1,DS_cpy, &runcfg->cpyMethod);
         else {
 #ifdef MultiThread
             mutex_lock(&instructions->Mutex);
@@ -778,11 +778,11 @@ void Fragpath_swap(Fragpath* fragpath, const void* obj1, const void* obj2){
             *((void**)path2) = temp;
 #ifdef MultiThread
             mutex_lock(&previnstr2->Mutex);
-            if ((((struct generic_cell*)place2)->cellProtector -= 2) == 1)cond_broadcast(&previnstr2->CND_exp);
+            if ((place2->cellProtector -= 2) == 1)cond_broadcast(&previnstr2->CND_exp);
             mutex_unlock(&previnstr2->Mutex);
         }
         mutex_lock(&previnstr1->Mutex);
-        if ((((struct generic_cell*)place1)->cellProtector -= 2) == 1)cond_broadcast(&previnstr1->CND_exp);
+        if ((place1->cellProtector -= 2) == 1)cond_broadcast(&previnstr1->CND_exp);
         mutex_unlock(&previnstr1->Mutex);
 #else
         }
