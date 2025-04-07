@@ -67,7 +67,7 @@ void * Vector_get(Vector* restrict vector,uint32_t loc){
 void Vector_insert(Vector* restrict vector, uint32_t loc , createFunc creator , const void* obj) {
     register uint32_t cSize = vector->size;
     register uint32_t count = vector->count;
-    if (count == cSize) refactor(vector, (cSize = cSize << 1));
+    if (count == cSize) refactor(vector, (cSize = cSize + (((cSize << 1) + cSize) >> 2)));
     register void** bufferHead = vector->head;
     loc -= ((loc <= count) - 1) & (loc - count);
     if (loc < ((count + 1) >> 1)) {
@@ -123,9 +123,10 @@ void Vector_executeFunc(Vector* restrict vector, uint32_t loc, void * (*func)(vo
                 }
             }
             vector->count = count = count - 1;
-            if (count <= (csize >> 1) && csize > 1 && count > 0) {
-                uint32_t size;
-                refactor(vector, (size = (csize * 3) >> 2, size <= 1) ? 1 : size);
+            if (count <= (csize >> 1) && csize > 4 && count > 0) {
+                uint32_t size = ((csize << 1) + csize) >> 2;
+                size = ( (-(size >= 4)) & size ) | ( (-(size < 4)) & 4 );
+                refactor(vector, size);
             }
         }
         else *target = newval;
@@ -145,7 +146,7 @@ void Vector_swap(Vector* restrict vector, uint32_t pos1, uint32_t pos2) {
     return;
 }
 
-void Vector_transfer(Vector* restrict dest, Vector* restrict src) {
+void Vector_init_transfer(Vector* restrict dest, Vector* restrict src) {
     dest->head = src->head;
     dest->first = src->first;
     dest->last = src->last;
@@ -157,22 +158,22 @@ void Vector_transfer(Vector* restrict dest, Vector* restrict src) {
 void Vector_clear(Vector* restrict vector, void* (*func)(void*, void*), void* args){
     uint32_t i = 0;
     while (i < vector->count) func(vector->head[uplimit(vector->first + i++, vector->size)],args);
-    vector->size = 1;
+    vector->size = 4;
     vector->count = 0;
     vector->first = vector->last = 0;
     free(vector->head);
-    vector->head = (void**)malloc(sizeof(void**));
+    vector->head = (void**)malloc(4 * sizeof(void**));
     return;
 }
 void Vector_destroy(Vector* restrict vector , void* (*func)(void*, void*), void* args){
     uint32_t i = 0;
-    if(func)while (i < vector->count) func(vector->head[uplimit(vector->first + i++ , vector->size)], args);
+    while (i < vector->count) func(vector->head[uplimit(vector->first + i++ , vector->size)], args);
     free(vector->head);
     return;
 }
-void Vector_init(Vector * res ,uint32_t size){
-    res->size = 1 + (-(size > 1) & (size - 1));
-    res->head = (void**)malloc(res->size * sizeof(void*));
+void Vector_init(Vector * res){
+    res->size = 4;
+    res->head = (void**)malloc(4 * sizeof(void*));
     res->count = 0;
     res->first = 0;
     res->last = 0;

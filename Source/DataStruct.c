@@ -1,8 +1,7 @@
 #include "../Headers/DataStruct.h"
 
 void* DS_nullify(void* cell, void* args) {
-    if (args == NULL)free(cell);
-    else ((void (*)(void*))args)(cell);
+    if (args != NULL) ((void (*)(void*))args)(cell);
     return NULL;
 }
 

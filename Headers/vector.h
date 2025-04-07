@@ -12,7 +12,9 @@ typedef struct Vector_str {
 //The documentations for the functions are already in the linked list header
 //The functionality is similar , the difference is in how those functions are written
 
-void Vector_init(Vector* res, uint32_t size);
+void Vector_init(Vector* res);
+//Transfers a Vector object from one memory block to an other , the old block of vector needs to initialized again to be usable , nothing is deallocated
+void Vector_init_transfer(Vector* restrict dest, Vector* restrict src);
 uint32_t Vector_count(Vector* restrict vector);
 //Get the element in the specified index or NULL when no elements are present
 void* Vector_get(Vector* restrict vector, uint32_t loc);
@@ -22,8 +24,6 @@ void Vector_insert(Vector* restrict vector, uint32_t loc, createFunc creator , c
 void Vector_executeFunc(Vector* restrict vector, uint32_t loc, void* (*func)(void*, void*), void* args);
 //Swaps the indexes of two elements
 void Vector_swap(Vector* restrict vector, uint32_t pos1, uint32_t pos2);
-//Transfers a Vector object from one memory block to an other , the old block of vector needs to initialized again to be usable , nothing is deallocated
-void Vector_transfer(Vector* restrict dest, Vector* restrict src);
 //Clears the vector from every element within using the func argument
 void Vector_clear(Vector* restrict vector, void* (*func)(void*, void*), void* args);
 //Deallocates every memory the vector allocated using the func argument
