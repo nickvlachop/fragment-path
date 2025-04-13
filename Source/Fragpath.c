@@ -380,18 +380,6 @@ struct cell_args {
     uint8_t common_count;
 };
 
-struct inner_args {
-    instr* cints;
-    void* common;
-};
-
-struct leafEx_args {
-    uint16_t size;
-    void* uncommon;
-    void* obj;
-    uint8_t newDepth;
-};
-
 static void* restrict makeLeaf(const void* args) {
     instr* tempInstr = ((struct cell_args*)args)->cints;
     uint8_t depth = 1;
@@ -423,68 +411,6 @@ static void* restrict makeLeaf(const void* args) {
     return result;
 }
 
-static void* restrict makeLeafEx(const void* args) {
-    void* result = malloc(sizeof(struct leaf_cell) + ((struct leafEx_args *)args)->size);
-    memcpy(((struct leaf_cell*)result)->area, ((struct leafEx_args*)args)->uncommon, ((struct leafEx_args*)args)->size);
-    ((struct leaf_cell*)result)->context = ((struct leafEx_args*)args)->obj;
-    ((struct leaf_cell*)result)->parent.instrcount = ((struct leafEx_args*)args)->newDepth;
-    ((struct leaf_cell*)result)->parent.cell_type = 1;
-#ifdef MultiThread
-    ((struct leaf_cell*)result)->parent.cellProtector = 0;
-#endif
-    return result;
-}
-static void* reduceCell(void* cell, void* cinstr) {
-#ifdef MultiThread
-    mutex_lock(&((instr**)cinstr)[0]->Mutex);
-    ((struct inner_cell*)cell)->mthrd.thrd_active_count -= 1;
-    if (((struct inner_cell*)cell)->mthrd.writercount)cond_broadcast(&((instr**)cinstr)[0]->CND_W);
-    else if (((struct inner_cell*)cell)->mthrd.readercount)cond_broadcast(&((instr**)cinstr)[0]->CND_R);
-    mutex_unlock(&((instr**)cinstr)[0]->Mutex);
-    mutex_lock(&((instr**)cinstr)[1]->Mutex);
-    ((struct generic_cell*)cell)->cellProtector -= 1;
-    while (((struct generic_cell*)cell)->cellProtector & (~1)) cond_sleep(&((instr**)cinstr)[1]->CND_exp, &((instr**)cinstr)[1]->Mutex);
-    ((struct generic_cell*)cell)->cellProtector -= 1;
-    mutex_unlock(&((instr**)cinstr)[1]->Mutex);
-#endif
-    if (Vector_count(&((struct inner_cell*)cell)->mthrd.array) < 2) {
-        struct generic_cell* restrict downcell = Vector_get(&((struct inner_cell*)cell)->mthrd.array, 0);
-        Vector_destroy(&((struct inner_cell*)cell)->mthrd.array, DS_nullify, NULL);
-#ifdef MultiThread
-        mutex_lock(&((instr**)cinstr)[0]->Mutex);
-        downcell->cellProtector += 1;
-        while (downcell->cellProtector & (~1)) cond_sleep(&((instr**)cinstr)[0]->CND_exp, &((instr**)cinstr)[0]->Mutex);
-        downcell->cellProtector -= 1;
-        mutex_unlock(&((instr**)cinstr)[0]->Mutex);
-#endif
-        uint8_t newcount = ((struct generic_cell*)cell)->instrcount + downcell->instrcount;
-        uint16_t downsize = 0, upsize = 0;
-        uint8_t i;
-        instr* tempinstr = ((instr**)cinstr)[1];
-        for (i = 0; i < ((struct generic_cell*)cell)->instrcount; i++) {
-            upsize += tempinstr->workmode;
-            tempinstr = tempinstr->next;
-        }
-        for (; i < newcount; i++) {
-            downsize += tempinstr->workmode;
-            tempinstr = tempinstr->next;
-        }
-        uint16_t totalSize = upsize + downsize;
-        int8_t* buffer = malloc(totalSize);
-        memcpy(buffer, ((struct inner_cell*)cell)->area, upsize);
-        memcpy(buffer + upsize, (char *)downcell + seloffset(downcell), downsize);
-        cell = realloc(cell, (((downcell->cell_type - 1) & sizeof(struct inner_cell)) | ((-downcell->cell_type) & sizeof(struct leaf_cell))) + totalSize);
-        if (downcell->cell_type == 0) Vector_init_transfer(&((struct inner_cell*)cell)->mthrd.array, &((struct inner_cell*)downcell)->mthrd.array);
-        else ((struct leaf_cell*)cell)->context = ((struct leaf_cell*)downcell)->context;
-        ((struct generic_cell*)cell)->cell_type = downcell->cell_type;
-        memcpy((char*)cell + seloffset(downcell), buffer, totalSize);
-        ((struct generic_cell*)cell)->instrcount = newcount;
-        free(downcell);
-        free(buffer);
-    }
-    return cell;
-}
-
 static void * expandCell(void * cell, void * args ) {
 #ifdef MultiThread
     mutex_lock(&((struct cell_args*)args)->cints->Mutex);
@@ -493,10 +419,11 @@ static void * expandCell(void * cell, void * args ) {
     ((struct generic_cell*)cell)->cellProtector -= 1;
     mutex_unlock(&((struct cell_args*)args)->cints->Mutex);
 #endif
-    struct leafEx_args newLeaf;
     uint8_t common_count = ((struct cell_args*)args)->common_count;
     uint8_t type = ((struct generic_cell*)cell)->cell_type;
     uint16_t commonSize = 0;
+    uint16_t uncommonSize = 0;
+    uint8_t newDepth = ((struct generic_cell*)cell)->instrcount - common_count;
     uint8_t arreaOffset = ((-type) & offsetof(struct leaf_cell, area)) | ((type - 1) & offsetof(struct inner_cell, area));
     {
         instr* generalInst = ((struct cell_args*)args)->cints;
@@ -504,55 +431,47 @@ static void * expandCell(void * cell, void * args ) {
             commonSize += generalInst->workmode;
             generalInst = generalInst->next;
         }
-        newLeaf.newDepth = ((struct generic_cell*)cell)->instrcount - common_count;
-        newLeaf.size = 0;
-        for (uint8_t i = 0; i < newLeaf.newDepth; i++) {
-            newLeaf.size += generalInst->workmode;
+        for (uint8_t i = 0; i < newDepth; i++) {
+            uncommonSize += generalInst->workmode;
             generalInst = generalInst->next;
         }
-        newLeaf.uncommon = memcpy(malloc(newLeaf.size), (uint8_t *)cell + arreaOffset + commonSize, newLeaf.size);
     }
-    if (type) {
-        int8_t* common = memcpy(malloc(commonSize), ((struct leaf_cell*)cell)->area, commonSize);
-        newLeaf.obj = ((struct leaf_cell*)cell)->context;
-        free(cell);
-        cell = malloc(sizeof(struct inner_cell) + commonSize);
-        ((struct inner_cell*)cell)->parent.instrcount = common_count;
-        ((struct inner_cell*)cell)->parent.cell_type = 0;
-        memcpy(((struct inner_cell*)cell)->area, common, commonSize);
-        Vector_init(&((struct inner_cell*)cell)->mthrd.array);
+    struct DS_cpy_args NewObj = { .bytes = 0 ,.obj = malloc(((-type) & sizeof(struct leaf_cell) | ((type - 1) & sizeof(struct inner_cell))) + uncommonSize) };
+    ((struct generic_cell*)NewObj.obj)->cell_type = type;
+    ((struct generic_cell*)NewObj.obj)->instrcount = newDepth;
 #ifdef MultiThread
-        ((struct inner_cell*)cell)->mthrd.thrd_active_count = 0;
-        ((struct inner_cell*)cell)->mthrd.readercount = 0;
-        ((struct inner_cell*)cell)->mthrd.writercount = 0;
-        ((struct inner_cell*)cell)->parent.cellProtector = 0;
+    ((struct generic_cell*)NewObj.obj)->cellProtector = 0;
 #endif
-        Vector_insert(&((struct inner_cell*)cell)->mthrd.array, 0, makeLeafEx, &newLeaf);
-        free(common);
-    }
+    memcpy((char *)NewObj.obj + arreaOffset, (uint8_t*)cell + arreaOffset + commonSize, uncommonSize);
+    if (type) ((struct leaf_cell*)NewObj.obj)->context = ((struct leaf_cell*)cell)->context;
     else {
-        struct inner_cell* belowcell = malloc(sizeof(struct inner_cell) + newLeaf.size);
+        Vector_init_transfer(&((struct inner_cell*)NewObj.obj)->mthrd.array, &((struct inner_cell*)cell)->mthrd.array);
 #ifdef MultiThread
-        belowcell->mthrd.thrd_active_count = 0;
-        belowcell->mthrd.readercount = 0;
-        belowcell->mthrd.writercount = 0;
-        belowcell->parent.cellProtector = 0;
+        ((struct inner_cell*)NewObj.obj)->mthrd.thrd_active_count = 0;
+        ((struct inner_cell*)NewObj.obj)->mthrd.readercount = 0;
+        ((struct inner_cell*)NewObj.obj)->mthrd.writercount = 0;
 #endif
-        belowcell->parent.instrcount = newLeaf.newDepth;
-        belowcell->parent.cell_type = 0;
-        memcpy(belowcell->area, newLeaf.uncommon, newLeaf.size);
-        Vector_init_transfer(&belowcell->mthrd.array, &((struct inner_cell*)cell)->mthrd.array);
-        cell = realloc(cell, sizeof(struct inner_cell) + commonSize);
-        ((struct inner_cell*)cell)->parent.instrcount = common_count;
-        Vector_init(&((struct inner_cell*)cell)->mthrd.array);
-        struct DS_cpy_args args = { .bytes = 0 ,.obj = belowcell };
-        Vector_insert(&((struct inner_cell*)cell)->mthrd.array, 0, DS_cpy, &args);
     }
+    {
+        void * newcell = malloc(sizeof(struct inner_cell) + commonSize);
+        memcpy(((struct inner_cell*)newcell)->area, (char*)cell + arreaOffset, commonSize);
+        free(cell);
+        cell = newcell;
+    }
+    Vector_init(&((struct inner_cell*)cell)->mthrd.array);
+    Vector_insert(&((struct inner_cell*)cell)->mthrd.array, 0, DS_cpy, &NewObj);
+    ((struct inner_cell*)cell)->parent.instrcount = common_count;
+    ((struct inner_cell*)cell)->parent.cell_type = 0;
+#ifdef MultiThread
+    ((struct inner_cell*)cell)->mthrd.thrd_active_count = 0;
+    ((struct inner_cell*)cell)->mthrd.readercount = 0;
+    ((struct inner_cell*)cell)->mthrd.writercount = 0;
+    ((struct inner_cell*)cell)->parent.cellProtector = 0;
+#endif
     do ((struct cell_args*)args)->cints = ((struct cell_args*)args)->cints->next; while (--common_count);
     Vector_insert(&((struct inner_cell*)cell)->mthrd.array, 1, makeLeaf, args);
     if (memcmp((int8_t *)Vector_get(&((struct inner_cell*)cell)->mthrd.array, 0) + arreaOffset, ((struct leaf_cell*)Vector_get(&((struct inner_cell*)cell)->mthrd.array, 1))->area, ((struct cell_args*)args)->cints->workmode) > 0)
         Vector_swap(&((struct inner_cell*)cell)->mthrd.array, 0, 1);
-    free(newLeaf.uncommon);
     return cell;
 }
 
@@ -618,6 +537,69 @@ void* Fragpath_contains(Fragpath* fragpath, const void* obj){
     free(data);
     return destination;
 }
+
+static void* reduceCell(void* cell, void* cinstr) {
+#ifdef MultiThread
+    mutex_lock(&((instr**)cinstr)[0]->Mutex);
+    ((struct inner_cell*)cell)->mthrd.thrd_active_count -= 1;
+    if (((struct inner_cell*)cell)->mthrd.writercount)cond_broadcast(&((instr**)cinstr)[0]->CND_W);
+    else if (((struct inner_cell*)cell)->mthrd.readercount)cond_broadcast(&((instr**)cinstr)[0]->CND_R);
+    mutex_unlock(&((instr**)cinstr)[0]->Mutex);
+    mutex_lock(&((instr**)cinstr)[1]->Mutex);
+    ((struct generic_cell*)cell)->cellProtector -= 1;
+    while (((struct generic_cell*)cell)->cellProtector & (~1)) cond_sleep(&((instr**)cinstr)[1]->CND_exp, &((instr**)cinstr)[1]->Mutex);
+    ((struct generic_cell*)cell)->cellProtector -= 1;
+    mutex_unlock(&((instr**)cinstr)[1]->Mutex);
+#endif
+    if (Vector_count(&((struct inner_cell*)cell)->mthrd.array) < 2) {
+        struct generic_cell* restrict downcell = Vector_get(&((struct inner_cell*)cell)->mthrd.array, 0);
+        Vector_destroy(&((struct inner_cell*)cell)->mthrd.array, DS_nullify, NULL);
+#ifdef MultiThread
+        mutex_lock(&((instr**)cinstr)[0]->Mutex);
+        downcell->cellProtector += 1;
+        while (downcell->cellProtector & (~1)) cond_sleep(&((instr**)cinstr)[0]->CND_exp, &((instr**)cinstr)[0]->Mutex);
+        downcell->cellProtector -= 1;
+        mutex_unlock(&((instr**)cinstr)[0]->Mutex);
+#endif
+        uint8_t newcount = ((struct generic_cell*)cell)->instrcount + downcell->instrcount;
+        uint16_t downsize = 0, upsize = 0;
+        uint8_t i;
+        instr* tempinstr = ((instr**)cinstr)[1];
+        for (i = 0; i < ((struct generic_cell*)cell)->instrcount; i++) {
+            upsize += tempinstr->workmode;
+            tempinstr = tempinstr->next;
+        }
+        for (; i < newcount; i++) {
+            downsize += tempinstr->workmode;
+            tempinstr = tempinstr->next;
+        }
+        uint16_t totalSize = upsize + downsize;
+        int8_t* buffer = malloc(totalSize);
+        memcpy(buffer, ((struct inner_cell*)cell)->area, upsize);
+        memcpy(buffer + upsize, (char*)downcell + seloffset(downcell), downsize);
+        free(cell);
+        cell = malloc((((downcell->cell_type - 1) & sizeof(struct inner_cell)) | ((-downcell->cell_type) & sizeof(struct leaf_cell))) + totalSize);
+        if (downcell->cell_type == 0) {
+            Vector_init_transfer(&((struct inner_cell*)cell)->mthrd.array, &((struct inner_cell*)downcell)->mthrd.array);
+#ifdef MultiThread
+            ((struct inner_cell*)cell)->mthrd.thrd_active_count = 0;
+            ((struct inner_cell*)cell)->mthrd.readercount = 0;
+            ((struct inner_cell*)cell)->mthrd.writercount = 0;
+#endif
+        }
+        else ((struct leaf_cell*)cell)->context = ((struct leaf_cell*)downcell)->context;
+        memcpy((char*)cell + seloffset(downcell), buffer, totalSize);
+        ((struct generic_cell*)cell)->cell_type = downcell->cell_type;
+        ((struct generic_cell*)cell)->instrcount = newcount;
+#ifdef MultiThread
+        ((struct generic_cell*)cell)->cellProtector = 0;
+#endif
+        free(downcell);
+        free(buffer);
+    }
+    return cell;
+}
+
 void Fragpath_executeFunc(Fragpath* fragpath, const void* obj , void * (*func)(void * , void *),void * args){
 #ifdef MultiThread
     instr* priorInstr[3];
