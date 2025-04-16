@@ -9,7 +9,7 @@
 #define cond_broadcast(x) WakeAllConditionVariable(x)
 #define mutex_lock(x) EnterCriticalSection(x)
 #define mutex_unlock(x) LeaveCriticalSection(x)
-#define mutex_init(x) InitializeCriticalSection(x)
+#define mutex_init(x) InitializeCriticalSectionAndSpinCount(x, INFINITE)
 #define mutex_destroy(x) DeleteCriticalSection(x)
 #define cond_init(x) InitializeConditionVariable(x)
 #define cond_destroy(x)
