@@ -1,9 +1,9 @@
 #include "../Headers/linkedlist.h"
 #include <stddef.h>
 struct cell{
-    struct cell * next;
-    struct cell * previous;
-    void* context;
+    struct cell * restrict next;
+    struct cell * restrict previous;
+    void* restrict context;
 };
 
 static struct cell * parseCell(LinkedList* restrict base,uint32_t location){
@@ -25,9 +25,9 @@ static struct cell * parseCell(LinkedList* restrict base,uint32_t location){
     return position;
 }
 
-void LinkedList_insert(LinkedList* restrict base, uint32_t loc , createFunc creator, const void* cont){
+void LinkedList_insert(LinkedList* restrict base, uint32_t loc , void * restrict content){
     struct cell* newCell = (struct cell*)malloc(sizeof(struct cell));
-    newCell->context = creator(cont);
+    newCell->context = content;
     if (base->size == 0) {
         base->head = base->tail = newCell;
         newCell->next = NULL;
@@ -59,67 +59,68 @@ void LinkedList_insert(LinkedList* restrict base, uint32_t loc , createFunc crea
     return;
 }
 
-void * LinkedList_get(LinkedList* restrict base,uint32_t loc){
-    void* result;
+void * restrict LinkedList_get(LinkedList* restrict base,uint32_t loc){
+    void* restrict result;
     if (base->size == 0)result = NULL;
     else if (loc >= base->size)result = base->tail->context;
     else result = parseCell(base, loc)->context;
     return result;
 }
-void LinkedList_executeFunc(LinkedList* restrict base, uint32_t loc, void* (*func)(void*, void*), void* args) {
-    struct cell* place;
+static void LinkedList_remove(LinkedList* restrict base, uint32_t loc, struct cell * restrict place) {
     switch (base->size) {
     default:
-        if (loc == 0) place = base->head;
-        else if (loc >= (base->size - 1)) place = base->tail;
-        else place = parseCell(base, loc);
-        
-        if ((place->context = func(place->context, args)) == NULL) {
-            if (loc == 0) {
-                place->next->previous = NULL;
-                base->head = place->next;
-            }
-            else if (loc >= (base->size - 1)) {
-                place->previous->next = NULL;
-                base->tail = place->previous;
-            }
-            else {
-                place->previous->next = place->next;
-                place->next->previous = place->previous;
-            }
-            free(place);
-            base->size -= 1;
+        if (loc == 0) {
+            place->next->previous = NULL;
+            base->head = place->next;
+        }
+        else if (loc >= (base->size - 1)) {
+            place->previous->next = NULL;
+            base->tail = place->previous;
+        }
+        else {
+            place->previous->next = place->next;
+            place->next->previous = place->previous;
         }
         break;
     case 1:
-        place = base->head;
-        if ((place->context = func(place->context, args)) == NULL) {
-            base->head = base->tail = NULL;
-            free(place);
-            base->size -= 1;
-        }
+        base->head = base->tail = NULL;
         break;
     case 2:
-        if (loc == 0) place = base->head;
-        else place = base->tail;
-        
-        if ((place->context = func(place->context, args)) == NULL) {
-            if (loc == 0) {
-                base->head = base->tail;
-                base->tail->previous = NULL;
-            }
-            else {
-                base->tail = base->head;
-                base->head->next = NULL;
-            }
-            free(place);
-            base->size -= 1;
+        if (loc == 0) {
+            base->head = base->tail;
+            base->tail->previous = NULL;
+        }
+        else {
+            base->tail = base->head;
+            base->head->next = NULL;
         }
         break;
-    case 0:;
     }
+    free(place);
+    base->size -= 1;
     return;
 }
+
+void LinkedList_executeFunc(LinkedList* restrict base, uint32_t loc, void* (*func)(void*, void*), void* args) {
+    struct cell* place;
+    if (base->size == 0)place = NULL;
+    else if (loc >= base->size)place = base->tail;
+    else place = parseCell(base, loc);
+    if ((place->context = func(place->context, args)) == NULL)
+        LinkedList_remove(base, loc ,place);
+    return;
+}
+
+void LinkedList_delete(LinkedList* restrict base, uint32_t loc, void (*func)(void*)) {
+    struct cell* place;
+    if (base->size == 0)place = NULL;
+    else if (loc >= base->size)place = base->tail;
+    else place = parseCell(base, loc);
+    func(place->context);
+    LinkedList_remove(base, loc, place);
+    return;
+}
+
 void LinkedList_swap(LinkedList* restrict base,uint32_t location1,uint32_t location2){
     uint32_t loc1, loc2 , diff;
     if (location1 > location2){
@@ -163,19 +164,24 @@ void LinkedList_init(LinkedList* res){
     res->tail = NULL;
     res->size = 0;
 }
-void LinkedList_clear(LinkedList* restrict base, void* (*func)(void*, void*), void* args){
-    LinkedList_destroy(base,func,args);
+void LinkedList_clear(LinkedList* restrict base, void (*func)(void*)){
+    LinkedList_destroy(base,func);
     base->head = NULL;
     base->tail = NULL;
     base->size = 0;
     return;
 }
 
-void LinkedList_destroy(LinkedList* restrict base, void* (*func)(void*, void*), void* args){
-    struct cell* position = base->head;
-    while (position != NULL) {
-        struct cell* next = position->next;
-        func(position->context,args);
+void LinkedList_destroy(LinkedList* restrict base, void (*func)(void*)){
+    struct cell* position = base->head , *next;
+    if(func) while (position != NULL) {
+        next = position->next;
+        func(position->context);
+        free(position);
+        position = next;
+    }
+    else {
+        next = position->next;
         free(position);
         position = next;
     }

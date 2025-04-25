@@ -4,6 +4,8 @@ static inline uint32_t uplimit(const uint32_t number,const uint32_t ceiling) {
     return number - (((number < ceiling) - 1) & ceiling);
 }
 
+#define tri_state(x,y,z) ((-(x)) & (y)) | (((x) - 1) & (z))
+
 static void refactor(Vector* restrict vector, uint32_t newSize) {
     register uint32_t i = 0;
     register void** mainLoc;
@@ -56,15 +58,14 @@ static void refactor(Vector* restrict vector, uint32_t newSize) {
 uint32_t Vector_count(Vector* restrict vector){
     return vector->count;
 }
-void * Vector_get(Vector* restrict vector,uint32_t loc){
-    void* result;
+void * restrict Vector_get(Vector* restrict vector,uint32_t loc){
+    void* restrict result;
     if (vector->count == 0) result = NULL;
-    else if (loc >= vector->count) result = vector->head[uplimit(vector->size + vector->last - 1 , vector->size)];
-    else result = vector->head[uplimit(vector->first + loc , vector->size)];
+    else result = vector->head[uplimit(tri_state(loc >= vector->count, vector->size + vector->last - 1, vector->first + loc), vector->size)];
     return result;
 }
 
-void Vector_insert(Vector* restrict vector, uint32_t loc , createFunc creator , const void* obj) {
+void Vector_insert(Vector* restrict vector, uint32_t loc , void * restrict context) {
     register uint32_t cSize = vector->size;
     register uint32_t count = vector->count;
     if (count == cSize) refactor(vector, (cSize = cSize + (((cSize << 1) + cSize) >> 2)));
@@ -89,56 +90,58 @@ void Vector_insert(Vector* restrict vector, uint32_t loc , createFunc creator , 
             cLast = next;
         }
     }
-    bufferHead[loc] = creator(obj);
+    bufferHead[loc] = context;
     vector->count = count + 1;
     return;
 }
 
-void Vector_executeFunc(Vector* restrict vector, uint32_t loc, void * (*func)(void*, void*), void* args) { 
-    if (vector->count != 0){
-        register uint32_t csize = vector->size;
-        register uint32_t count = vector->count;
+static void Vector_remove(Vector* restrict vector, uint32_t loc) {
+    register uint32_t count = vector->count;
+    register uint32_t csize = vector->size;
+    register void* restrict* restrict bufferHead = vector->head;
+    {
         register uint32_t cFirst = vector->first;
         register uint32_t cLast = vector->last;
-        if (loc >= count) loc = uplimit(csize + cLast - 1 , csize);
-        else loc = uplimit(cFirst + loc , csize);
-        void** target = &vector->head[loc];
-        void* newval = func(*target, args);
-        if (newval == NULL) {
-            register void** bufferHead = vector->head;
-            if (((-(loc > cLast) & (loc - cLast)) | (-(loc <= cLast) & (cLast - loc))) > ((-(loc > cFirst) & (loc - cFirst)) | (-(loc <= cFirst) & (cFirst - loc)))) {
-                vector->first = uplimit(cFirst + 1 , csize);
-                while (loc != cFirst) {
-                    register uint32_t next;
-                    bufferHead[loc] = bufferHead[next = uplimit(csize + loc - 1 , csize)];
-                    loc = next;
-                }
-            }
-            else {
-                vector->last = cLast = uplimit(csize + cLast - 1, csize);
-                while (loc != cLast) {
-                    register uint32_t next;
-                    bufferHead[loc] = bufferHead[next = uplimit(loc + 1, csize)];
-                    loc = next;
-                }
-            }
-            vector->count = count = count - 1;
-            if (count <= (csize >> 1) && csize > 4 && count > 0) {
-                uint32_t size = ((csize << 1) + csize) >> 2;
-                size = ( (-(size >= 4)) & size ) | ( (-(size < 4)) & 4 );
-                refactor(vector, size);
+        register uint32_t next;
+        if (((-(loc > cLast) & (loc - cLast)) | (-(loc <= cLast) & (cLast - loc))) > ((-(loc > cFirst) & (loc - cFirst)) | (-(loc <= cFirst) & (cFirst - loc)))) {
+            vector->first = uplimit(cFirst + 1, csize);
+            while (loc != cFirst) {
+                bufferHead[loc] = bufferHead[next = uplimit(csize + loc - 1, csize)];
+                loc = next;
             }
         }
-        else *target = newval;
+        else {
+            vector->last = cLast = uplimit(csize + cLast - 1, csize);
+            while (loc != cLast) {
+                bufferHead[loc] = bufferHead[next = uplimit(loc + 1, csize)];
+                loc = next;
+            }
+        }
     }
+    vector->count = count = count - 1;
+    if (count <= (csize >> 1) && csize > 4 && count > 0) {
+        register uint32_t size = ((csize << 1) + csize) >> 2;
+        size = ( (-(size >= 4)) & size ) | ( (-(size < 4)) & 4 );
+        refactor(vector, size);
+    }
+}
+
+void Vector_executeFunc(Vector* restrict vector, uint32_t loc, void* (*func)(void*, void*), void* args) {
+    loc = uplimit(tri_state(loc >= vector->count, vector->size + vector->last - 1, vector->first + loc), vector->size);
+    if ((vector->head[loc] = func(vector->head[loc], args)) == NULL)
+        Vector_remove(vector, loc);
+}
+
+void Vector_delete(Vector* restrict vector, uint32_t loc, void (*func)(void*)) {
+    loc = uplimit(tri_state(loc >= vector->count, vector->size + vector->last - 1, vector->first + loc), vector->size);
+    if(func)func(vector->head[loc]);
+    Vector_remove(vector, loc);
 }
 
 void Vector_swap(Vector* restrict vector, uint32_t pos1, uint32_t pos2) {
     if (vector->count >= 2) {
-        if (pos1 >= vector->count) pos1 = uplimit(vector->size + vector->last - 1 , vector->size);
-        else pos1 = uplimit(vector->first + pos1 , vector->size);
-        if (pos2 >= vector->count) pos2 = uplimit(vector->size + vector->last - 1, vector->size);
-        else pos2 = uplimit(vector->first + pos2 , vector->size);
+        pos1 = uplimit(tri_state(pos1 >= vector->count, vector->size + vector->last - 1, vector->first + pos1), vector->size);
+        pos2 = uplimit(tri_state(pos2 >= vector->count, vector->size + vector->last - 1, vector->first + pos2), vector->size);
         void* temp = vector->head[pos1];
         vector->head[pos1] = vector->head[pos2];
         vector->head[pos2] = temp;
@@ -155,9 +158,9 @@ void Vector_init_transfer(Vector* restrict dest, Vector* restrict src) {
     src->head = NULL;
 }
 
-void Vector_clear(Vector* restrict vector, void* (*func)(void*, void*), void* args){
+void Vector_clear(Vector* restrict vector, void (*func)(void*)){
     uint32_t i = 0;
-    while (i < vector->count) func(vector->head[uplimit(vector->first + i++, vector->size)],args);
+    if(func)while (i < vector->count) func(vector->head[uplimit(vector->first + i++, vector->size)]);
     vector->size = 4;
     vector->count = 0;
     vector->first = vector->last = 0;
@@ -165,9 +168,9 @@ void Vector_clear(Vector* restrict vector, void* (*func)(void*, void*), void* ar
     vector->head = (void**)malloc(4 * sizeof(void**));
     return;
 }
-void Vector_destroy(Vector* restrict vector , void* (*func)(void*, void*), void* args){
+void Vector_destroy(Vector* restrict vector , void(*func)(void*)){
     uint32_t i = 0;
-    while (i < vector->count) func(vector->head[uplimit(vector->first + i++ , vector->size)], args);
+    if(func)while (i < vector->count) func(vector->head[uplimit(vector->first + i++ , vector->size)]);
     free(vector->head);
     return;
 }

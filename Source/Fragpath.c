@@ -54,7 +54,7 @@ struct inner_cell {
 
 struct leaf_cell {
     struct generic_cell parent;
-    void* context;
+    void* restrict context;
     int8_t area[];
 };
 
@@ -103,7 +103,7 @@ static void searchVector(Vector* array, const void* dataOfAddress,instr * restri
 static instr* restrict Fragpath_iterator_READ(struct mthrd_str* path,
     instr* restrict element,
     void* const restrict dataOfAddress,
-    void** const restrict addressOut,
+    void* restrict ** const restrict addressOut,
     const void* const address
 #ifdef MultiThread
     , struct generic_cell* restrict* restrict const priorplace,
@@ -340,14 +340,15 @@ static instr* restrict Fragpath_iterator_ERASE(
 }
 
 
-struct disposeCond {
-    void* (*freeFunc)(void*, void*);
-    void* freeArgs;
+struct exec_struct {
+    union { void* (*func)(void*, void*); void (*destructor)(void*); };
+    void* Args;
     instr* cinstr;
+    char destroy;
 };
 
 static void* executeIn(void* cell, void* disposeVar) {
-    instr* tempinstr = ((struct disposeCond*)disposeVar)->cinstr;
+    instr* tempinstr = ((struct exec_struct*)disposeVar)->cinstr;
 #ifdef MultiThread
     mutex_lock(&tempinstr->Mutex);
     ((struct generic_cell*)cell)->cellProtector += 1;
@@ -358,34 +359,38 @@ static void* executeIn(void* cell, void* disposeVar) {
     if (((struct generic_cell*)cell)->cell_type == 0) {
         instr* newinstr = tempinstr;
         for (uint8_t i = 0; i < ((struct generic_cell*)cell)->instrcount; i++)newinstr = newinstr->next;
-        ((struct disposeCond*)disposeVar)->cinstr = newinstr;
-        Vector_destroy(&((((struct inner_cell*)cell)->mthrd).array), executeIn, disposeVar);
-        ((struct disposeCond*)disposeVar)->cinstr = tempinstr;
+        ((struct exec_struct*)disposeVar)->cinstr = newinstr;
+        for (uint32_t i = 0, count = Vector_count(&((((struct inner_cell*)cell)->mthrd).array)); i < count; i++)
+            Vector_executeFunc(&((((struct inner_cell*)cell)->mthrd).array),i,executeIn, disposeVar);
+        Vector_destroy(&((((struct inner_cell*)cell)->mthrd).array), NULL);
+        ((struct exec_struct*)disposeVar)->cinstr = tempinstr;
         free(cell);
         cell = NULL;
     }
-    else if ((((struct leaf_cell*)cell)->context = ((struct disposeCond*)disposeVar)->freeFunc(((struct leaf_cell*)cell)->context, ((struct disposeCond*)disposeVar)->freeArgs)) == NULL){
-        free(cell);
-        cell = NULL;
+    else {
+        if (((struct exec_struct*)disposeVar)->destroy || (((struct leaf_cell*)cell)->context = ((struct exec_struct*)disposeVar)->func(((struct leaf_cell*)cell)->context, ((struct exec_struct*)disposeVar)->Args)) == NULL) {
+            if (((struct exec_struct*)disposeVar)->destroy && ((struct exec_struct*)disposeVar)->destructor) ((struct exec_struct*)disposeVar)->destructor(((struct leaf_cell*)cell)->context);
+            free(cell);
+            cell = NULL;
+        }
     }
     return cell;
 }
 
 struct cell_args {
     const void* obj;
-    const void* newObj;
+    void* restrict newObj;
     instr* cints;
     void* tempUn;
-    createFunc type;
     uint8_t common_count;
 };
 
-static void* restrict makeLeaf(const void* args) {
-    instr* tempInstr = ((struct cell_args*)args)->cints;
+static void* restrict makeLeaf(struct cell_args* args) {
+    instr* tempInstr = args->cints;
     uint8_t depth = 1;
     void* result;
     {
-        uint16_t size = ((struct cell_args*)args)->cints->workmode;
+        uint16_t size = args->cints->workmode;
         while ((tempInstr = tempInstr->next) != NULL) {
             size += tempInstr->workmode;
             depth += 1;
@@ -393,17 +398,17 @@ static void* restrict makeLeaf(const void* args) {
         result = malloc(sizeof(struct leaf_cell) + size);
     }
     ((struct leaf_cell*)result)->parent.instrcount = depth;
-    tempInstr = ((struct cell_args*)args)->cints;
-    memcpy(((struct leaf_cell*)result)->area, ((struct cell_args*)args)->tempUn, tempInstr->workmode);
+    tempInstr = args->cints;
+    memcpy(((struct leaf_cell*)result)->area, args->tempUn, tempInstr->workmode);
     uint16_t offset = tempInstr->workmode;
     tempInstr = tempInstr->next;
     for (uint8_t i = 1; i < depth; i++) {
-        compress(((struct cell_args*)args)->tempUn, ((struct cell_args*)args)->obj, tempInstr->countofjumps, tempInstr->jumps);
-        memcpy(((struct leaf_cell*)result)->area + offset, ((struct cell_args*)args)->tempUn, tempInstr->workmode);
+        compress(args->tempUn, args->obj, tempInstr->countofjumps, tempInstr->jumps);
+        memcpy(((struct leaf_cell*)result)->area + offset, args->tempUn, tempInstr->workmode);
         offset += tempInstr->workmode;
         tempInstr = tempInstr->next;
     }
-    ((struct leaf_cell*)result)->context = ((struct cell_args*)args)->type(((struct cell_args*)args)->newObj);
+    ((struct leaf_cell*)result)->context = args->newObj;
     ((struct leaf_cell*)result)->parent.cell_type = 1;
 #ifdef MultiThread
     ((struct leaf_cell*)result)->parent.cellProtector = 0;
@@ -436,20 +441,20 @@ static void * expandCell(void * cell, void * args ) {
             generalInst = generalInst->next;
         }
     }
-    struct DS_cpy_args NewObj = { .bytes = 0 ,.obj = malloc(((-type) & sizeof(struct leaf_cell) | ((type - 1) & sizeof(struct inner_cell))) + uncommonSize) };
-    ((struct generic_cell*)NewObj.obj)->cell_type = type;
-    ((struct generic_cell*)NewObj.obj)->instrcount = newDepth;
+    struct generic_cell* restrict NewObj = malloc(((-type) & sizeof(struct leaf_cell) | ((type - 1) & sizeof(struct inner_cell))) + uncommonSize) ;
+    NewObj->cell_type = type;
+    NewObj->instrcount = newDepth;
 #ifdef MultiThread
-    ((struct generic_cell*)NewObj.obj)->cellProtector = 0;
+    NewObj->cellProtector = 0;
 #endif
-    memcpy((char *)NewObj.obj + arreaOffset, (uint8_t*)cell + arreaOffset + commonSize, uncommonSize);
-    if (type) ((struct leaf_cell*)NewObj.obj)->context = ((struct leaf_cell*)cell)->context;
+    memcpy((char *)NewObj + arreaOffset, (uint8_t*)cell + arreaOffset + commonSize, uncommonSize);
+    if (type) ((struct leaf_cell*)NewObj)->context = ((struct leaf_cell*)cell)->context;
     else {
-        Vector_init_transfer(&((struct inner_cell*)NewObj.obj)->mthrd.array, &((struct inner_cell*)cell)->mthrd.array);
+        Vector_init_transfer(&((struct inner_cell*)NewObj)->mthrd.array, &((struct inner_cell*)cell)->mthrd.array);
 #ifdef MultiThread
-        ((struct inner_cell*)NewObj.obj)->mthrd.thrd_active_count = 0;
-        ((struct inner_cell*)NewObj.obj)->mthrd.readercount = 0;
-        ((struct inner_cell*)NewObj.obj)->mthrd.writercount = 0;
+        ((struct inner_cell*)NewObj)->mthrd.thrd_active_count = 0;
+        ((struct inner_cell*)NewObj)->mthrd.readercount = 0;
+        ((struct inner_cell*)NewObj)->mthrd.writercount = 0;
 #endif
     }
     {
@@ -459,7 +464,7 @@ static void * expandCell(void * cell, void * args ) {
         cell = newcell;
     }
     Vector_init(&((struct inner_cell*)cell)->mthrd.array);
-    Vector_insert(&((struct inner_cell*)cell)->mthrd.array, 0, DS_cpy, &NewObj);
+    Vector_insert(&((struct inner_cell*)cell)->mthrd.array, 0, NewObj);
     ((struct inner_cell*)cell)->parent.instrcount = common_count;
     ((struct inner_cell*)cell)->parent.cell_type = 0;
 #ifdef MultiThread
@@ -469,13 +474,13 @@ static void * expandCell(void * cell, void * args ) {
     ((struct inner_cell*)cell)->parent.cellProtector = 0;
 #endif
     do ((struct cell_args*)args)->cints = ((struct cell_args*)args)->cints->next; while (--common_count);
-    Vector_insert(&((struct inner_cell*)cell)->mthrd.array, 1, makeLeaf, args);
+    Vector_insert(&((struct inner_cell*)cell)->mthrd.array, 1, makeLeaf(args));
     if (memcmp((int8_t *)Vector_get(&((struct inner_cell*)cell)->mthrd.array, 0) + arreaOffset, ((struct leaf_cell*)Vector_get(&((struct inner_cell*)cell)->mthrd.array, 1))->area, ((struct cell_args*)args)->cints->workmode) > 0)
         Vector_swap(&((struct inner_cell*)cell)->mthrd.array, 0, 1);
     return cell;
 }
 
-void Fragpath_insert(Fragpath* fragpath, const void* obj , createFunc creator , const void* newObj){
+void Fragpath_insert(Fragpath* fragpath, const void* obj , void * restrict newObj){
     struct cell_args entry;
     struct generic_cell* restrict temp;
 #ifdef MultiThread
@@ -483,7 +488,6 @@ void Fragpath_insert(Fragpath* fragpath, const void* obj , createFunc creator , 
 #endif
     uint32_t place;
     entry.obj = obj;
-    entry.type = creator;
     entry.newObj = newObj;
     entry.tempUn = malloc(fragpath->largestByte);
 #ifdef MultiThread
@@ -495,7 +499,7 @@ void Fragpath_insert(Fragpath* fragpath, const void* obj , createFunc creator , 
     if (firstInstr) {
         struct mthrd_str* realStruct = (temp != NULL) ? &((struct inner_cell*)temp)->mthrd : (struct mthrd_str*)&fragpath->array;
         if (entry.common_count) Vector_executeFunc(&realStruct->array, place, expandCell, &entry);
-        else Vector_insert(&realStruct->array, place, makeLeaf, &entry);
+        else Vector_insert(&realStruct->array, place, makeLeaf(&entry));
 #ifdef MultiThread
         mutex_lock(&firstInstr->Mutex);
         realStruct->thrd_active_count -= 1;
@@ -517,7 +521,7 @@ void Fragpath_insert(Fragpath* fragpath, const void* obj , createFunc creator , 
 void* Fragpath_contains(Fragpath* fragpath, const void* obj){
     void* destination;
     void* data = malloc(fragpath->largestByte);
-    void * temp;
+    void * restrict* temp;
 #ifdef MultiThread
     instr* restrict priorInstr;
     struct generic_cell* restrict priorplace;
@@ -526,7 +530,7 @@ void* Fragpath_contains(Fragpath* fragpath, const void* obj){
     instr* next = Fragpath_iterator_READ((struct mthrd_str*)&fragpath->array, fragpath->objStructSizes, data, &temp, obj);
 #endif
     if (next == NULL) {
-        destination = *((void**)temp);
+        destination = *temp;
 #ifdef MultiThread
         mutex_lock(&priorInstr->Mutex);
         if ((((struct generic_cell*)priorplace)->cellProtector -= 2) == 1)cond_broadcast(&priorInstr->CND_exp);
@@ -553,7 +557,7 @@ static void* reduceCell(void* cell, void* cinstr) {
 #endif
     if (Vector_count(&((struct inner_cell*)cell)->mthrd.array) < 2) {
         struct generic_cell* restrict downcell = Vector_get(&((struct inner_cell*)cell)->mthrd.array, 0);
-        Vector_destroy(&((struct inner_cell*)cell)->mthrd.array, DS_nullify, NULL);
+        Vector_destroy(&((struct inner_cell*)cell)->mthrd.array, NULL);
 #ifdef MultiThread
         mutex_lock(&((instr**)cinstr)[0]->Mutex);
         downcell->cellProtector += 1;
@@ -600,7 +604,7 @@ static void* reduceCell(void* cell, void* cinstr) {
     return cell;
 }
 
-void Fragpath_executeFunc(Fragpath* fragpath, const void* obj , void * (*func)(void * , void *),void * args){
+static void Fragpath_modify(Fragpath* fragpath, const void* obj , struct exec_struct * disposal){
 #ifdef MultiThread
     instr* priorInstr[3];
 #else
@@ -615,11 +619,11 @@ void Fragpath_executeFunc(Fragpath* fragpath, const void* obj , void * (*func)(v
         realStruct[0] = &priorplace[0]->mthrd;
         if (locs[2] > 2)realStruct[1] = &priorplace[1]->mthrd;
     }
+    disposal->cinstr = priorInstr[0];
 #ifdef MultiThread
     uint8_t last;
     if (next == NULL) {
-        struct disposeCond disposal = { .freeFunc = func , .freeArgs = args , .cinstr = priorInstr[0]};
-        Vector_executeFunc(&realStruct[0]->array, locs[0], executeIn, &disposal);
+        Vector_executeFunc(&realStruct[0]->array, locs[0], executeIn, disposal);
         if (locs[2] >= 2) {
             Vector_executeFunc(&realStruct[1]->array, locs[1], reduceCell, priorInstr);
             last = 1;
@@ -641,8 +645,7 @@ void Fragpath_executeFunc(Fragpath* fragpath, const void* obj , void * (*func)(v
     }
 #else
     if (next == NULL) {
-        struct disposeCond disposal = { .freeFunc = func , .freeArgs = args , .cinstr = priorInstr[0] };
-        Vector_executeFunc(&realStruct[0]->array, locs[0], executeIn, &disposal);
+        Vector_executeFunc(&realStruct[0]->array, locs[0], executeIn, disposal);
         if (locs[2] >= 2) Vector_executeFunc(&realStruct[1]->array, locs[1], reduceCell, priorInstr);
     }
 #endif
@@ -650,9 +653,20 @@ void Fragpath_executeFunc(Fragpath* fragpath, const void* obj , void * (*func)(v
     return;
 }
 
+void Fragpath_executeFunc(Fragpath* fragpath, const void* obj, void* (*func)(void*, void*), void* args) {
+    struct exec_struct disposal = { .func = func , .Args = args ,.destroy = 0 };
+    Fragpath_modify(fragpath, obj, &disposal);
+}
+
+void Fragpath_delete(Fragpath* fragpath, const void* obj, void (*func)(void*)) {
+    struct exec_struct disposal = { .destructor = func ,.destroy = 1 };
+    Fragpath_modify(fragpath, obj, &disposal);
+}
+
 struct common {
     LinkedList list;
-    struct DS_cpy_args cpyMethod;
+    uint16_t bytes;
+    void* obj;
 };
 
 static void getKeys_Rec(instr* restrict instructions, struct mthrd_str * array, struct common* runcfg){
@@ -683,7 +697,7 @@ static void getKeys_Rec(instr* restrict instructions, struct mthrd_str * array, 
                 setback += currentInstr->countofjumps;
                 currentInstr = currentInstr->next;
             }
-            void* newDest = (int8_t*)runcfg->cpyMethod.obj + currentInstr->jumps[k - setback].jump;
+            void* newDest = (int8_t*)runcfg->obj + currentInstr->jumps[k - setback].jump;
             void* finalSource = newSource + offset;
             switch (currentInstr->jumps[k - setback].size) {
                 default:*((int8_t*)newDest) = *((int8_t*)finalSource);break;
@@ -693,7 +707,7 @@ static void getKeys_Rec(instr* restrict instructions, struct mthrd_str * array, 
             }
             offset += currentInstr->jumps[k - setback].size;
         }
-        if (cell->cell_type) LinkedList_insert(&runcfg->list, -1,DS_cpy, &runcfg->cpyMethod);
+        if (cell->cell_type) LinkedList_insert(&runcfg->list, -1,DS_cpy(runcfg->bytes,runcfg->obj));
         else getKeys_Rec(currentInstr->next, &((struct inner_cell*)cell)->mthrd, runcfg);
     }
 #ifdef MultiThread
@@ -705,37 +719,37 @@ static void getKeys_Rec(instr* restrict instructions, struct mthrd_str * array, 
 }
 void* Fragpath_getKeys(Fragpath* fragpath, uint32_t* count){
     struct common cfg;
-    cfg.cpyMethod.bytes = fragpath->bytes;
-    cfg.cpyMethod.obj = malloc(cfg.cpyMethod.bytes);
+    cfg.bytes = fragpath->bytes;
+    cfg.obj = malloc(cfg.bytes);
     LinkedList_init(&cfg.list);
     getKeys_Rec(fragpath->objStructSizes, (struct mthrd_str*)&fragpath->array, &cfg);
-    free(cfg.cpyMethod.obj);
+    free(cfg.obj);
     void* result = malloc(fragpath->bytes * (*count = LinkedList_count(&cfg.list)));
     void* parser = result;
     while (LinkedList_count(&cfg.list) > 0) {
         memcpy(parser, LinkedList_get(&cfg.list, 0), fragpath->bytes);
         parser = (int8_t*)parser + fragpath->bytes;
-        LinkedList_executeFunc(&cfg.list,0, DS_nullify,free);
+        LinkedList_delete(&cfg.list,0, free);
     }
     return result;
 }
-void Fragpath_swap(Fragpath* fragpath, const void* obj1, const void* obj2){
-    void * path1 , *path2;
+void Fragpath_swap(Fragpath* fragpath, const void* key1, const void* key2){
+    void* restrict* path1 ,* restrict* path2;
     void* data = malloc(fragpath->largestByte);
 #ifdef MultiThread
     struct generic_cell* restrict place1, * restrict place2;
     instr* restrict previnstr1, * restrict previnstr2;
 #endif
 #ifdef MultiThread
-    if (Fragpath_iterator_READ((struct mthrd_str *)&fragpath->array, fragpath->objStructSizes, data, &path1, obj1, &place1, &previnstr1) == NULL) {
-        if (Fragpath_iterator_READ((struct mthrd_str*)&fragpath->array, fragpath->objStructSizes, data, &path2, obj2, &place2, &previnstr2) == NULL) {
+    if (Fragpath_iterator_READ((struct mthrd_str *)&fragpath->array, fragpath->objStructSizes, data, &path1, key1, &place1, &previnstr1) == NULL) {
+        if (Fragpath_iterator_READ((struct mthrd_str*)&fragpath->array, fragpath->objStructSizes, data, &path2, key2, &place2, &previnstr2) == NULL) {
 #else
-    if (Fragpath_iterator_READ((struct mthrd_str*)&fragpath->array, fragpath->objStructSizes, data, &path1, obj1) == NULL) {
-        if (Fragpath_iterator_READ((struct mthrd_str*)&fragpath->array, fragpath->objStructSizes, data, &path2, obj2) == NULL) {
+    if (Fragpath_iterator_READ((struct mthrd_str*)&fragpath->array, fragpath->objStructSizes, data, &path1, key1) == NULL) {
+        if (Fragpath_iterator_READ((struct mthrd_str*)&fragpath->array, fragpath->objStructSizes, data, &path2, key2) == NULL) {
 #endif
-            void* temp = *((void**)path1);
-            *((void**)path1) = *((void**)path2);
-            *((void**)path2) = temp;
+            void* temp = *path1;
+            *path1 = *path2;
+            *path2 = temp;
 #ifdef MultiThread
             mutex_lock(&previnstr2->Mutex);
             if ((place2->cellProtector -= 2) == 1)cond_broadcast(&previnstr2->CND_exp);
@@ -763,17 +777,17 @@ struct pure_instr {
     jumpInstruction jumps[];
 };
 
-static void* setInstr(const void* data){
-    uint16_t count = ((semi_instr*)data)->countofjumps, i = 0;
+static void* restrict setInstr(semi_instr* data){
+    uint16_t count = data->countofjumps, i = 0;
     struct pure_instr* result = (struct pure_instr*)malloc(sizeof(struct pure_instr) + (count * sizeof(jumpInstruction)));
-    jumpInstruction* dest = result->jumps, * src = ((semi_instr*)data)->jumps;
+    jumpInstruction* dest = result->jumps, * src = data->jumps;
     while (i < count) {
         dest[i].jump = src[i].jump;
         dest[i].size = src[i].size;
         i += 1;
     }
     result->countofjumps = count;
-    result->workmode = ((semi_instr*)data)->workmode;
+    result->workmode = data->workmode;
     return result;
 }
 static instr* Fragpath_init(LinkedList* const actualbytes, uint16_t* const restrict largeOut){
@@ -791,9 +805,6 @@ static instr* Fragpath_init(LinkedList* const actualbytes, uint16_t* const restr
         }
         LinkedList command;
         struct jumpcmd currJumpOp;
-        struct DS_cpy_args cpyArg;
-        cpyArg.bytes = sizeof(struct jumpcmd);
-        cpyArg.obj = &currJumpOp;
         LinkedList_init(&command);
         for (uint8_t i = 0 , temp = 1; i < segcount; ++i) while (bytesPerSegm[i]) {
             uint16_t maxStep = bytes - (-(temp < bytes) & (bytes - temp));
@@ -810,7 +821,7 @@ static instr* Fragpath_init(LinkedList* const actualbytes, uint16_t* const restr
                         currentJump = tempVar;
                         currJumpOp.jumpSize = currentJump;
                         currJumpOp.segment = i + indexOfSegment - 1;
-                        LinkedList_insert(&command,-1, DS_cpy, &cpyArg);
+                        LinkedList_insert(&command,-1, DS_cpy(sizeof(struct jumpcmd), &currJumpOp));
                         totalSize += currentJump;
                         sizeofsegm -= currentJump;
                     }
@@ -824,13 +835,13 @@ static instr* Fragpath_init(LinkedList* const actualbytes, uint16_t* const restr
                         currentJump -= 1;
                         currJumpOp.jumpSize = Single;
                         currJumpOp.segment = temploc->segment;
-                        LinkedList_insert(&command,-1, DS_cpy, &cpyArg);
+                        LinkedList_insert(&command,-1, DS_cpy(sizeof(struct jumpcmd), &currJumpOp));
                     }
                     if (currentJump == 6) {
                         currentJump -= 2;
                         currJumpOp.jumpSize = Double;
                         currJumpOp.segment = temploc->segment;
-                        LinkedList_insert(&command,-1, DS_cpy, &cpyArg);
+                        LinkedList_insert(&command,-1, DS_cpy(sizeof(struct jumpcmd), &currJumpOp));
                     }
                     temploc->jumpSize = currentJump;
                 }
@@ -854,14 +865,14 @@ static instr* Fragpath_init(LinkedList* const actualbytes, uint16_t* const restr
                     data.jumps[k].jump = ((*segment)[1] - bytesPerSegm[currentCommand->segment]) + (*segment)[0];
                     bytesPerSegm[currentCommand->segment] -= currentCommand->jumpSize;
                 }
-                LinkedList_insert(&steplist,-1 , setInstr, &data);
+                LinkedList_insert(&steplist,-1 , setInstr(&data));
                 free(data.jumps);
             }
-            LinkedList_clear(&command, DS_nullify,free);
+            LinkedList_clear(&command, free);
         }
         free(bytesPerSegm);
-        LinkedList_destroy(actualbytes,DS_nullify,free);
-        LinkedList_destroy(&command,DS_nullify,free);
+        LinkedList_destroy(actualbytes,free);
+        LinkedList_destroy(&command,free);
     }
     {
         uint16_t count = LinkedList_count(&steplist) - 1;
@@ -892,7 +903,7 @@ static instr* Fragpath_init(LinkedList* const actualbytes, uint16_t* const restr
             cond_init(&(*dest)->CND_W);
             cond_init(&(*dest)->CND_exp);
 #endif
-            LinkedList_executeFunc(&steplist,0, DS_nullify,free);
+            LinkedList_delete(&steplist,0, free);
             dest = &(*dest)->next;
         } while (LinkedList_count(&steplist) > 0);
         (*dest) = NULL;
@@ -903,18 +914,15 @@ void Fragpath_create(Fragpath* fragpath,const seginfo* restrict objectStruct,uin
     uint16_t objBytes;
     {
         LinkedList map; LinkedList_init(&map);
-        struct DS_cpy_args cpArgs;
-        cpArgs.bytes = sizeof(seginfo);
         uint8_t f = 0;
         {
             seginfo newseg , *currentSeg;
             currentSeg = NULL;
-            cpArgs.obj = &newseg;
             newseg[1] = objectStruct[f][1];
             do {
                 newseg[0] = objectStruct[f][0];
                 if (currentSeg == NULL || newseg[0] != (*currentSeg)[0] + (*currentSeg)[1]) {
-                    LinkedList_insert(&map, -1, DS_cpy, &cpArgs);
+                    LinkedList_insert(&map, -1, DS_cpy(sizeof(seginfo), &newseg));
                     currentSeg = (seginfo*)LinkedList_get(&map, -1);
                 }
                 else (*currentSeg)[1] += newseg[1];
@@ -925,7 +933,6 @@ void Fragpath_create(Fragpath* fragpath,const seginfo* restrict objectStruct,uin
         f = LinkedList_count(&map);
         {
             seginfo finalseg ,lastitem, *last , *currentTail;
-            cpArgs.obj = &finalseg;
             currentTail = (seginfo*)LinkedList_get(&map, f);
             lastitem[0] = (*currentTail)[0];
             lastitem[1] = (*currentTail)[1];
@@ -937,7 +944,7 @@ void Fragpath_create(Fragpath* fragpath,const seginfo* restrict objectStruct,uin
                     finalseg[1] = (*last)[1];
                     if (finalseg[0] == (*currentTail)[0] + (*currentTail)[1])(*currentTail)[1] += finalseg[1];
                     else {
-                        LinkedList_insert(&map, -1, DS_cpy, &cpArgs);
+                        LinkedList_insert(&map, -1, DS_cpy(sizeof(seginfo),&finalseg));
                         currentTail = (seginfo*)LinkedList_get(&map, -1);
                     }
                 }
@@ -954,12 +961,14 @@ void Fragpath_create(Fragpath* fragpath,const seginfo* restrict objectStruct,uin
     fragpath->bytes = arrayCount * objBytes;
     return;
 }
-void Fragpath_destroy(Fragpath* fragpath, void* (*func)(void*, void*), void* args){
-    struct disposeCond disposal;
-    disposal.freeFunc = func;
-    disposal.freeArgs = args;
+void Fragpath_destroy(Fragpath* fragpath, void (*func)(void*)){
+    struct exec_struct disposal;
+    disposal.destructor = func;
     disposal.cinstr = fragpath->objStructSizes;
-    Vector_destroy(&fragpath->array,executeIn,&disposal);
+    disposal.destroy = 1;
+    for (uint32_t i = 0, count = Vector_count(&fragpath->array); i < count; i++)
+        Vector_executeFunc(&fragpath->array, i, executeIn, &disposal);
+    Vector_destroy(&fragpath->array, NULL);
     for (instr* place = fragpath->objStructSizes, *nextPlace; place != NULL; place = nextPlace) {
         nextPlace = place->next;
 #ifdef MultiThread
@@ -972,11 +981,14 @@ void Fragpath_destroy(Fragpath* fragpath, void* (*func)(void*, void*), void* arg
     }
     return;
 }
-void Fragpath_clear(Fragpath* fragpath, void* (*func)(void*, void*), void* args){
-    struct disposeCond disposal;
-    disposal.freeFunc = func;
-    disposal.freeArgs = args;
+void Fragpath_clear(Fragpath* fragpath, void (*func)(void*)){
+    struct exec_struct disposal;
+    disposal.destructor = func;
     disposal.cinstr = fragpath->objStructSizes;
-    Vector_clear(&fragpath->array,executeIn, &disposal);
+    disposal.destroy = 1;
+    disposal.cinstr = fragpath->objStructSizes;
+    for (uint32_t i = 0, count = Vector_count(&fragpath->array); i < count; i++)
+        Vector_executeFunc(&fragpath->array, i, executeIn, &disposal);
+    Vector_clear(&fragpath->array, NULL);
     return;
 }

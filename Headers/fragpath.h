@@ -33,17 +33,19 @@ typedef struct Fragpath_str {
 //Creates the Fragpath
 void Fragpath_create(Fragpath*, const seginfo* restrict objectStruct, uint8_t arrayCount);
 //Adds a key to the Fragpath , does nothing if the key exists
-void Fragpath_insert(Fragpath*, const void* key , createFunc creator , const void* newObj);
+void Fragpath_insert(Fragpath*, const void* key , void* restrict newObj);
 //Gets the value from a key , returns NULL if they key does not exists
 void* Fragpath_contains(Fragpath*, const void* key);
-//Executes a function at a value specified by the key, the function has to return the address of a new value or the address of the current value or NULL to delete the key
+//Executes a function at a value specified by the key, the function has to return the address of a new value or the address of the current value or NULL to delete the key, assuming the value is deleted
 void Fragpath_executeFunc(Fragpath*, const void* key , void* (*func)(void*, void*), void* args);
+//Deletes the key and the value using the function provided , can be null to avoid the deletion of value
+void Fragpath_delete(Fragpath* fragpath, const void* obj, void (*func)(void*));
 //Swaps the values of two keys
 void Fragpath_swap(Fragpath*, const void* key1, const void* key2);
 //Returns an array of every key within the Fragpath
 void* Fragpath_getKeys(Fragpath*, uint32_t* keyCount);
 //Frees every resourse the Fragpath allocated and deletes every value stored within the Fragpath using the func argument
-void Fragpath_destroy(Fragpath* , void* (*func)(void*, void*), void* args);
+void Fragpath_destroy(Fragpath* , void (*func)(void*));
 //Deletes every key and value within the Fragpath using the func argument
-void Fragpath_clear(Fragpath* , void* (*func)(void*, void*), void* args);
+void Fragpath_clear(Fragpath* , void (*func)(void*));
 #endif // !Fragpath
