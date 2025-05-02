@@ -101,20 +101,17 @@ static void LinkedList_remove(LinkedList* restrict base, uint32_t loc, struct ce
     return;
 }
 
-void LinkedList_executeFunc(LinkedList* restrict base, uint32_t loc, void* (*func)(void*, void*), void* args) {
+void LinkedList_executeFunc(LinkedList* restrict base, uint32_t loc, void* restrict(*func)(void*, void*), void* args) {
     struct cell* place;
-    if (base->size == 0)place = NULL;
-    else if (loc >= base->size)place = base->tail;
+    if (loc >= base->size)place = base->tail;
     else place = parseCell(base, loc);
-    if ((place->context = func(place->context, args)) == NULL)
-        LinkedList_remove(base, loc ,place);
+    if ((place->context = func(place->context, args)) == NULL) LinkedList_remove(base, loc ,place);
     return;
 }
 
 void LinkedList_delete(LinkedList* restrict base, uint32_t loc, void (*func)(void*)) {
     struct cell* place;
-    if (base->size == 0)place = NULL;
-    else if (loc >= base->size)place = base->tail;
+    if (loc >= base->size)place = base->tail;
     else place = parseCell(base, loc);
     func(place->context);
     LinkedList_remove(base, loc, place);

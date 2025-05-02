@@ -126,10 +126,9 @@ static void Vector_remove(Vector* restrict vector, uint32_t loc) {
     }
 }
 
-void Vector_executeFunc(Vector* restrict vector, uint32_t loc, void* (*func)(void*, void*), void* args) {
+void Vector_executeFunc(Vector* restrict vector, uint32_t loc, void* restrict(*func)(void*, void*), void* args) {
     loc = uplimit(tri_state(loc >= vector->count, vector->size + vector->last - 1, vector->first + loc), vector->size);
-    if ((vector->head[loc] = func(vector->head[loc], args)) == NULL)
-        Vector_remove(vector, loc);
+    if ((vector->head[loc] = func(vector->head[loc], args)) == NULL)Vector_remove(vector, loc);
 }
 
 void Vector_delete(Vector* restrict vector, uint32_t loc, void (*func)(void*)) {

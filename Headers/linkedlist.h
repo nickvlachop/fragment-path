@@ -16,7 +16,7 @@ void LinkedList_insert(LinkedList* restrict base, uint32_t loc, void* restrict c
 //Get the element in the specified index or NULL when no elements are present
 void* restrict LinkedList_get(LinkedList* restrict base, uint32_t loc);
 //Executes a function at the element in the specified index , the function has to return the address of a new element or the address of the element or NULL to delete the element
-void LinkedList_executeFunc(LinkedList* restrict base, uint32_t loc, void* (*func)(void*, void*), void* args);
+void LinkedList_executeFunc(LinkedList* restrict base, uint32_t loc, void* restrict(*func)(void*, void*), void* args);
 //Deletes the value of the given index using the function provided , can be null to avoid the deletion of value
 void LinkedList_delete(LinkedList* restrict base, uint32_t loc, void (*func)(void*));
 //Swaps the indexes of two elements

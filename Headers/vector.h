@@ -21,7 +21,7 @@ void* restrict Vector_get(Vector* restrict vector, uint32_t loc);
 //Adds an element at the specified index , values greater than the number of elements inside the vector implies an append operation
 void Vector_insert(Vector* restrict vector, uint32_t loc, void* restrict context);
 //Executes a function at the element in the specified index , the function has to return the address of a new element or the address of the element or NULL to delete the element
-void Vector_executeFunc(Vector* restrict vector, uint32_t loc, void* (*func)(void*, void*), void* args);
+void Vector_executeFunc(Vector* restrict vector, uint32_t loc, void* restrict(*func)(void*, void*), void* args);
 //Deletes the value of the given index using the function provided , can be null to avoid the deletion of value
 void Vector_delete(Vector* restrict vector, uint32_t loc, void (*func)(void*));
 //Swaps the indexes of two elements
