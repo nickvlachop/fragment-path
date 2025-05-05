@@ -22,8 +22,7 @@ typedef struct Fragpath_str {
     Vector array;
 #ifdef MultiThread
     uint8_t thrd_active_count;
-    uint8_t writercount;
-    uint8_t readercount;
+    uint8_t thrd_wait_count;
 #endif
     uint16_t largestByte;
     uint16_t bytes;
